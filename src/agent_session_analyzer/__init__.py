@@ -1,5 +1,5 @@
-"""Small, dependency-free harness recorder. Importing it never starts a model."""
+"""Public API; importing this package never starts a harness."""
+from .adapters import DshAdapter, OpenHandsAdapter
+from .recorders import DshRecorder, OpenHandsRecorder
 
-from .recorder import DshRecorder
-
-__all__ = ["DshRecorder"]
+__all__ = ["DshAdapter", "OpenHandsAdapter", "DshRecorder", "OpenHandsRecorder"]

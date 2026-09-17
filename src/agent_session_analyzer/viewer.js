@@ -34,23 +34,27 @@ async function load(id) {
 function attemptCard(e) {
   const d=e.data||{}, card=el('details','attempt');card.open=true;
   const summary=el('summary','',`Model attempt ${d.attempt_index} · ${e.model?.model||'模型未提供'} `);
-  const labels={committed:'已提交',uncommitted:'未提交 / 失败尝试',interrupted:'已中断'};
-  summary.append(badge(labels[d.status]||d.status||'未知',d.status==='committed'?'good':'bad'));
+  const labels={committed:'已提交',completed:'已返回',failed:'请求失败',event_only:'仅有事件 / usage 缺失',uncommitted:'未提交 / 失败尝试',interrupted:'已中断'};
+  summary.append(badge(labels[d.status]||d.status||'未知',['committed','completed'].includes(d.status)?'good':'bad'));
   card.append(summary);const body=el('div','card-body');
   body.append(el('p','muted',`Provider: ${e.model?.provider||'未提供'} · 结束原因: ${pretty(d.finish_reason)||'未提供'}`));
   const tokens=el('div','token-row');
   for(const [key,label] of Object.entries({total_tokens:'总 token',input_tokens:'输入（原始）',output_tokens:'输出',cache_read_tokens:'缓存读取',reasoning_tokens:'思考'}))tokens.append(el('span','token',`${label} ${fmt(d.usage?.[key])}`));
   body.append(tokens);
   block(body,'思考内容',d.reasoning,'reasoning');block(body,'模型输出',d.text);
+  if(d.thought)block(body,'动作说明（thought）',pretty(d.thought));
+  if(d.error)body.append(el('div','block-title','请求错误'),el('pre','',pretty(d.error)));
   body.append(extra('查看原始事件与 stream',e.raw||e));card.append(body);return card;
 }
 function toolCard(call,result) {
   const card=el('details','tool');
-  const failed=result?.data?.is_error===true;const status=!result?'等待结果 / 未观测到结果':failed?'工具错误':'已返回';
+  const failed=result?.data?.is_error===true;const status=!result?'等待结果 / 未观测到结果':result?.data?.rejected?'调用被拒绝':failed?'工具错误':'已返回';
   const summary=el('summary','',`Tool · ${call?.data?.name||'未知工具'} `);summary.append(badge(status,failed?'bad':result?'good':''));
   card.append(summary);const body=el('div','card-body');
   body.append(el('p','muted',`callId: ${call?.tool_call_id||result?.tool_call_id||'未提供'} · 调用到结果: ${duration(call?.time_ms,result?.time_ms)}`));
   block(body,'关联模型尝试',call?.attempt_id||result?.attempt_id||'未知');
+  if(call?.data?.thought)block(body,'动作说明（thought）',pretty(call.data.thought));
+  if(call?.data?.reasoning_fields?.reasoning)block(body,'动作事件中的思考',call.data.reasoning_fields.reasoning,'reasoning');
   const args=call?.data?.arguments;let parsed=args;try{parsed=JSON.parse(args);}catch{}
   body.append(el('div','block-title','工具参数'),el('pre','',pretty(parsed)??'未提供'));
   body.append(el('div','block-title','工具结果'),el('pre','',result?pretty(result.data.content)??'未提供':'尚未记录到结果'));
@@ -60,10 +64,11 @@ function toolCard(call,result) {
 function render(trace) {
   $('title').textContent=trace.session_id||'未知 session';$('subtitle').textContent=trace.format+' · '+trace.file;
   const failures=trace.events.filter(e=>e.event==='run.failed').map(e=>`运行异常：${e.data?.error_type||''} ${e.data?.message||''}`);
-  notice([...trace.warnings,...failures].join('\n'),failures.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;
+  const captureWarnings=trace.events.filter(e=>e.event==='capture.warning').map(e=>e.data?.message).filter(Boolean);
+  notice([...trace.warnings,...failures,...new Set(captureWarnings)].join('\n'),failures.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;
   $('metrics').replaceChildren();
   for(const [label,value,detail] of [['总 token'+(partial?'（已知部分）':''),fmt(t.total_tokens),'只累计每次 attempt 的汇总 usage'],['模型尝试',s.attempts,'包括已观测到的失败 / 重试'],['工具调用',s.tools,'模型请求的工具调用数'],['轮次 / 步骤',`${s.turns} / ${s.steps}`,'Turn / Step']]){const c=el('div','metric');c.append(el('div','label',label),el('strong','',value),el('small','',detail));$('metrics').append(c);}
-  $('coverage').textContent=`总 token 覆盖 ${s.usage_coverage.total_tokens}/${s.attempts} 个尝试 · 输入/缓存/思考为 dsh 原始口径，不重复相加。工具耗时是日志事件间隔。`;
+  $('coverage').textContent=`总 token 覆盖 ${s.usage_coverage.total_tokens}/${s.attempts} 个尝试 · 输入/缓存/思考保留来源口径，不重复相加。工具耗时是日志事件间隔；OpenHands step 为派生分组，耗时未知。`;
   const turns=new Map(),outside=[];
   for(const e of trace.events){if(e.turn_id==null){outside.push(e);continue;}if(!turns.has(e.turn_id))turns.set(e.turn_id,[]);turns.get(e.turn_id).push(e);}
   $('timeline').replaceChildren();

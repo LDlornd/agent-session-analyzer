@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dsh = ["deepseek-harness-sdk>=0.1.5rc1"]
+openhands = ["openhands-sdk>=1.49.1,<1.50"]
 
 [project.scripts]
 agent-session-analyzer = "agent_session_analyzer.viewer:main"

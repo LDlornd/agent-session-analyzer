@@ -4,7 +4,7 @@
 
 层级：**session → turn → step → model attempt / tool call**。
 
-当前支持 dsh 同步 Python SDK。记录模型信息、token 消耗、接口返回的思考内容、工具参数和结果；保留原始事件与 stream。查看器支持本包日志及原生未压缩的 `session.v3.jsonl`。
+支持 dsh 同步 Python SDK；当前源码还新增了 OpenHands 本地同步 SDK 适配（静态参照 1.49.1，未执行验证）。记录模型信息、token 消耗、接口返回的思考内容、工具参数和结果；保留原始事件。查看器支持本包日志及原生未压缩的 dsh `session.v3.jsonl`。
 
 ## 安装
 
@@ -80,7 +80,7 @@ agent-session-analyzer --root ./logs/harness --root ./config/dsh/sessions --port
 | `session_id` | 原生会话 ID |
 | `recording_id` | 采集器实例 ID |
 | `run_id` | 一次 Python run 调用 |
-| `turn_id` / `step_id` | 原生轮次 / 步骤编号 |
+| `turn_id` / `step_id` | 来源轮次 / 步骤编号；OpenHands 为 recorder 定义的派生分组 |
 | `attempt_id` | session 内的 `turn/step/attempt_index` |
 | `tool_call_id` | 关联工具调用与工具结果 |
 | `source_seq` / `time_ms` | 原生事件序号 / 时间 |
@@ -110,3 +110,61 @@ uv build
 ```
 
 测试只使用模拟事件，不执行真实模型或工具。源码位于 `src/agent_session_analyzer`；前端资源随 wheel 一起安装。
+## OpenHands 接入（本地新增，尚未发布）
+
+这部分代码尚未包含在此前的 `v0.1.0` 标签中。需要从当前源码安装，
+例如在本仓库目录执行 `pip install -e ".[openhands]"`。
+适配依据为 OpenHands SDK 1.49.1 的本地同步接口，尚未执行运行验证。
+
+```python
+import os
+from agent_session_analyzer import OpenHandsRecorder
+
+# agent 使用你原有的 OpenHands Agent，保留原来的 LLM 和 tools 配置。
+with OpenHandsRecorder("./logs/harness") as recorder:
+    conversation = recorder.create_conversation(agent=agent, workspace=os.getcwd())
+    try:
+        recorder.run(conversation, "你的任务")
+        # 再次 recorder.run(conversation, "后续问题") 会写入同一 session 的新 turn。
+        # 首次运行必须传 task；之后 run(conversation) 可恢复暂停的任务。
+        print(recorder.last_path)
+    finally:
+        conversation.close()
+```
+
+`OpenHandsRecorder` 管理 JSONL 文件、Conversation 事件回调、LLM completion
+和 retry 回调。它串联并恢复已有回调，但不负责关闭 Conversation。
+已有事件回调可通过 `create_conversation(callbacks=[...])` 传入。
+`OpenHandsAdapter` 是不依赖 SDK 的纯转换器，公开
+`begin_turn(task)`、`event(event)`、`completion(filename, log_data, llm_key="main")`、
+`retry(llm_key, attempt_number, num_retries, error)`、`end_turn(status)`；
+每个方法返回可写入 JSONL 的记录列表。独立使用时需要自行调度回调、串行化和写文件。
+
+记录边界和限制：
+
+- 一个 Conversation 对应一个 session，每次 recorder.run 对应一个 turn，包含恢复调用。
+- step 按模型响应及相关工具调用归组，并非 SDK 原生 Agent.step 调用计数。
+  无请求开始回调，所以 step 开始时间为 null，不应据此计算精确 step 时长。
+- 同一 llm_response_id 只统计一次模型响应，多个工具通过 tool_call_id 关联结果。
+  retry_listener 记录 SDK 暴露的中间失败，最终 completion 记录最终尝试。
+- token 使用 response.usage；缺失为 null。缓存、推理 token 为分类指标，不能再加到 total_tokens。
+  completion 缺失时记录警告和 event_only，不把未知 token 当成零。
+- 思考内容仅来自可见的 reasoning_content、thinking blocks 或 Responses reasoning summary。
+  普通 thought 独立保留；不可见或加密的推理不尝试还原。raw 保留原始输入输出，请自行控制日志访问。
+- 当前仅支持本地同步 Conversation、串行运行，不支持远程/异步及并发共享 LLM。
+  钩子在 send_message 初始化完成后挂载，只覆盖 run 期间已登记的 LLM；
+  初始化调用、动态替换 LLM、供应商内部重试不保证覆盖。
+- SDK 只有 completion callback setter，没有 getter，因此为恢复旧回调读取了
+  `_log_completions_callback` 私有字段；升级 SDK 时需检查此处契约。
+  未设置旧回调时，运行期间由 recorder 接管 completion 日志出口。
+- paused、waiting_for_confirmation、stuck、error 均保留，不算 completed。
+
+离线测试代码位于 `tests/test_openhands.py`，不请求模型，不需要 SDK 或 API key。
+先从当前源码安装包，再执行 `python -m unittest discover -s tests -v`。
+另有 `examples/openhands_record.py` 可用于真实接入验证，会请求模型并产生费用。
+本次未执行测试，由用户自行验证。
+
+
+## 工程结构
+
+实现按 adapters/ 与 recorders/ 分层，通用协议版本位于 schema.py。原有模块路径保留兼容导入。目录职责、新增 harness 流程和后续建议见 [ARCHITECTURE.md](ARCHITECTURE.md)。

@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .adapter import SCHEMA, TOKEN_FIELDS, DshAdapter
+from .schema import SCHEMA
+from .adapters.dsh import TOKEN_FIELDS, DshAdapter
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
 
