@@ -8,16 +8,16 @@
 
 ## 安装
 
-Python 3.11+。仓库为私有仓库，需要当前 Git 已有访问权限（例如配置 GitHub SSH key）：
+Python 3.11+。仓库为私有仓库，需要当前 Git 已有访问权限。使用 GitHub CLI 的机器可先执行 `gh auth login` 和 `gh auth setup-git` 配置 HTTPS 认证：
 
 ```bash
-pip install "git+ssh://git@github.com/LDlornd/agent-session-analyzer.git@v0.1.0"
+pip install "git+https://github.com/LDlornd/agent-session-analyzer.git@v0.1.0"
 ```
 
 使用 uv 的项目：
 
 ```bash
-uv add "agent-session-analyzer @ git+ssh://git@github.com/LDlornd/agent-session-analyzer.git@v0.1.0"
+uv add "agent-session-analyzer @ git+https://github.com/LDlornd/agent-session-analyzer.git@v0.1.0"
 ```
 
 仅从 GitHub 安装，尚未发布到 PyPI。包本身没有运行时第三方依赖。接入 dsh 时项目需另外安装 `deepseek-harness-sdk`，也可安装本包的 `dsh` extra。
