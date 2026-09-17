@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Harness Trace · 运行记录</title><link rel="stylesheet" href="/viewer.css"><script src="/viewer.js" defer></script></head>
+<body>
+<aside>
+  <div class="brand"><span class="brand-icon">▤</span><div>Harness Trace<small>运行记录</small></div></div>
+  <div class="side-heading"><span>已保存的会话</span><button id="refresh" title="刷新文件与当前会话">刷新</button></div>
+  <input id="search" type="search" placeholder="筛选文件名…" aria-label="筛选文件名">
+  <nav id="files" aria-label="会话文件"></nav>
+  <details class="roots"><summary>读取目录</summary><pre id="roots"></pre></details>
+</aside>
+<main>
+  <header><div class="eyebrow">SESSION EXPLORER</div><h1 id="title">选择一个会话</h1><p id="subtitle">从左侧打开已保存的 JSONL，查看执行层级和模型消耗。</p></header>
+  <div id="message" role="status"></div>
+  <section id="metrics" class="metrics" aria-label="统计"></section>
+  <p id="coverage" class="muted"></p>
+  <div class="section-heading"><h2>执行轨迹</h2><span class="muted">Session / Turn / Step / Attempt · Tool</span></div>
+  <section id="timeline"><div class="empty">尚未选择文件</div></section>
+  <details id="source-section" hidden><summary>全部事件 · 原始记录</summary><pre id="source"></pre></details>
+</main>
+</body></html>
