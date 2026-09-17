@@ -7,7 +7,7 @@ name = "agent-session-analyzer"
 version = "0.1.0"
 description = "Record agent sessions as JSONL and explore turns, steps, model attempts and tools locally."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
