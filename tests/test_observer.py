@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from agent_session_analyzer.adapter import DshAdapter
+from agent_session_analyzer.adapters.dsh import DshAdapter
 from agent_session_analyzer.reader import parse_jsonl, read_trace, summarize
-from agent_session_analyzer.recorder import DshRecorder
+from agent_session_analyzer.recorders.dsh import DshRecorder
 from agent_session_analyzer.viewer import TraceServer
 
 

@@ -8,7 +8,7 @@
 
 ## 安装
 
-Python 3.11+。仓库为私有仓库，需要当前 Git 已有访问权限。使用 GitHub CLI 的机器可先执行 `gh auth login` 和 `gh auth setup-git` 配置 HTTPS 认证：
+Python 3.12+。仓库为私有仓库，需要当前 Git 已有访问权限。使用 GitHub CLI 的机器可先执行 `gh auth login` 和 `gh auth setup-git` 配置 HTTPS 认证：
 
 ```bash
 pip install "git+https://github.com/LDlornd/agent-session-analyzer.git@v0.1.0"
@@ -167,4 +167,19 @@ with OpenHandsRecorder("./logs/harness") as recorder:
 
 ## 工程结构
 
-实现按 adapters/ 与 recorders/ 分层，通用协议版本位于 schema.py。原有模块路径保留兼容导入。目录职责、新增 harness 流程和后续建议见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+实现按 adapters/ 与 recorders/ 分层，通用协议版本位于 schema.py。旧版平铺模块已删除，请使用包顶层接口或 adapters/recorders 下的模块。目录职责、新增 harness 流程和后续建议见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+### 从旧模块迁移
+
+推荐统一使用公开入口：
+
+```python
+from agent_session_analyzer import DshAdapter, DshRecorder, OpenHandsAdapter, OpenHandsRecorder
+from agent_session_analyzer.schema import SCHEMA
+```
+
+需要直接访问实现时，使用 `agent_session_analyzer.adapters.dsh`、
+`agent_session_analyzer.adapters.openhands`、`agent_session_analyzer.recorders.dsh`
+和 `agent_session_analyzer.recorders.openhands`。
+此前的 `adapter`、`recorder`、`openhands_adapter`、`openhands_recorder` 平铺模块已移除，
+外部项目若使用这些旧路径，也需要更新导入。包顶层接口与 JSONL 协议不变。

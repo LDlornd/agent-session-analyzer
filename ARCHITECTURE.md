@@ -13,16 +13,12 @@ src/agent_session_analyzer/
   reader.py               # 日志读取与指标汇总
   viewer.py               # 本地 HTTP 查看器和 CLI
   viewer.html/css/js      # 随包发布的静态资源
-  adapter.py              # 以下四个文件仅保留旧导入兼容
-  recorder.py
-  openhands_adapter.py
-  openhands_recorder.py
 examples/                 # 最小真实接入示例
 tests/                   # 离线契约与回归测试
 ```
 
 业务代码优先使用 `from agent_session_analyzer import OpenHandsRecorder`。
-内部代码从 adapters/recorders 的具体模块导入；不要从兼容文件反向依赖。
+内部代码从 adapters/recorders 的具体模块导入；通用协议常量从 schema 导入。旧版平铺模块已删除。
 SDK 依赖保持可选、延迟导入，纯 adapter 不执行模型请求和工具。
 
 ## 新增 harness
@@ -45,12 +41,12 @@ SDK 依赖保持可选、延迟导入，纯 adapter 不执行模型请求和工�
 ## 用户验证
 
 本次未执行测试、构建、lint 或服务启动。测试由用户自行执行。
-Python 3.11+，在仓库根目录执行：
+Python 3.12+，在仓库根目录执行：
 
 ```powershell
 python -m pip install -e .
 python -m unittest discover -s tests -v
 ```
 
-预期全部通过；重点检查新旧导入指向同一类、OpenHands 多工具 token 去重、重试归组、回调恢复和已有 dsh 行为。
+预期全部通过；重点检查包顶层导出与分层模块指向同一类、OpenHands 多工具 token 去重、重试归组、回调恢复和已有 dsh 行为。
 实际接入 OpenHands 时另装 `python -m pip install -e ".[openhands]"`，配置模型密钥后运行 examples/openhands_record.py；该示例会产生真实模型请求。
