@@ -4,6 +4,12 @@
 <body>
 <aside>
   <div class="brand"><span class="brand-icon">▤</span><div>Harness Trace<small>运行记录</small></div></div>
+  <form id="scan-form">
+    <label for="scan-roots">扫描目录</label>
+    <textarea id="scan-roots" rows="3" placeholder="输入目录路径，每行一个" aria-describedby="scan-help"></textarea>
+    <small id="scan-help">填写运行查看器的电脑上的路径，递归扫描 JSONL。</small>
+    <button id="scan" type="submit">扫描目录</button>
+  </form>
   <div class="side-heading"><span>已保存的会话</span><button id="refresh" title="刷新文件与当前会话">刷新</button></div>
   <input id="search" type="search" placeholder="筛选文件名…" aria-label="筛选文件名">
   <nav id="files" aria-label="会话文件"></nav>

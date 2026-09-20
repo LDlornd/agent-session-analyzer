@@ -18,9 +18,9 @@ class TraceServer(ThreadingHTTPServer):
         self.roots = [Path(p).resolve() for p in roots]
         super().__init__(address, TraceHandler)
 
-    def catalog(self):
+    def catalog(self, roots=None):
         entries = {}
-        for root in self.roots:
+        for root in (self.roots if roots is None else roots):
             if not root.is_dir():
                 continue
             for path in root.rglob("*.jsonl"):
@@ -50,6 +50,22 @@ class TraceHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def requested_roots(self, query):
+        values = parse_qs(query, keep_blank_values=True).get("root")
+        if values is None:
+            return self.server.roots
+        roots = []
+        for value in values:
+            value = value.strip()
+            if not value:
+                continue
+            root = Path(value).expanduser().resolve()
+            if not root.is_dir():
+                raise ValueError(f"扫描目录不存在或不是目录：{root}")
+            if root not in roots:
+                roots.append(root)
+        return roots
+
     def do_GET(self):
         host = self.headers.get("Host", "").split(":", 1)[0]
         if host not in ("127.0.0.1", "localhost"):
@@ -64,13 +80,14 @@ class TraceHandler(BaseHTTPRequestHandler):
                 name, mime = assets[url.path]
                 self.send(200, Path(__file__).with_name(name).read_bytes(), mime)
             elif url.path == "/api/files":
-                entries = self.server.catalog()
+                roots = self.requested_roots(url.query)
+                entries = self.server.catalog(roots)
                 files = [{k: v for k, v in item.items() if k != "path"} for item in entries.values()]
                 self.send(200, {"files": sorted(files, key=lambda x: x["modified_ms"], reverse=True),
-                                "roots": [str(p) for p in self.server.roots]})
+                                "roots": [str(p) for p in roots]})
             elif url.path == "/api/trace":
                 key = parse_qs(url.query).get("id", [""])[0]
-                entry = self.server.catalog().get(key)
+                entry = self.server.catalog(self.requested_roots(url.query)).get(key)
                 if entry is None:
                     self.send(404, {"error": "文件不存在，或不在配置的目录中"})
                     return
@@ -85,11 +102,10 @@ class TraceHandler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="本地 harness JSONL 查看器")
-    parser.add_argument("--root", action="append", help="日志目录，可重复传入；递归扫描 JSONL")
+    parser.add_argument("--root", action="append", help="预填日志目录，可重复传入；未指定时在网页中填写")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    project = Path.cwd()
-    roots = args.root or [project / "logs" / "harness", project / "config" / "dsh" / "sessions"]
+    roots = args.root or []
     server = TraceServer(("127.0.0.1", args.port), roots)
     print(f"JSONL viewer: http://127.0.0.1:{server.server_port}", flush=True)
     for root in server.roots:

@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let files = [], selected = null, loadVersion = 0;
+let files = [], selected = null, loadVersion = 0, scanVersion = 0, activeRoots = null;
 const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN');
 const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 function el(tag, cls, text) { const n=document.createElement(tag); if(cls)n.className=cls; if(text!=null)n.textContent=text; return n; }
@@ -19,16 +19,39 @@ function fileList() {
   }
   if(!$('files').childElementCount)$('files').append(el('p','muted',files.length?'没有匹配的文件':'目录中还没有 JSONL 文件'));
 }
-async function refresh() {
-  try { const data=await api('/api/files');files=data.files;$('roots').textContent=data.roots.join('\n');fileList();
+function rootsQuery(roots) {
+  if(roots===null)return '';
+  const query=new URLSearchParams();
+  for(const root of roots.length?roots:[''])query.append('root',root);
+  return query.toString();
+}
+function clearTrace() {
+  selected=null;$('metrics').replaceChildren();$('timeline').replaceChildren();
+  $('coverage').textContent='';$('source-section').hidden=true;$('source').textContent='';
+}
+async function refresh(roots=activeRoots) {
+  const request=++scanVersion;++loadVersion;
+  $('scan').disabled=true;$('refresh').disabled=true;notice('正在扫描…');
+  try {
+    const data=await api('/api/files?'+rootsQuery(roots));
+    if(request!==scanVersion)return;
+    ++loadVersion;activeRoots=data.roots;files=data.files;
+    if(roots===null)$('scan-roots').value=activeRoots.join('\n');
+    $('roots').textContent=activeRoots.join('\n')||'尚未设置';fileList();
     if(selected&&files.some(f=>f.id===selected))await load(selected);
     else if(files.length)await load(files[0].id);
-    else {selected=null;$('metrics').replaceChildren();$('timeline').replaceChildren(el('div','empty','运行记录器后，在这里点击刷新。'));$('title').textContent='暂无运行记录';$('subtitle').textContent='也可以通过 --root 指定已有 dsh 日志目录。';$('coverage').textContent='';$('source-section').hidden=true;notice('');}
-  } catch(e){notice(e.message,true);}
+    else {
+      clearTrace();fileList();
+      $('title').textContent=activeRoots.length?'暂无运行记录':'请设置扫描目录';
+      $('subtitle').textContent=activeRoots.length?'目录中没有 JSONL 文件，可修改路径后重新扫描。':'在左侧输入目录路径，点击“扫描目录”。';
+      $('timeline').append(el('div','empty','支持多个目录，每行一个。'));notice('');
+    }
+  } catch(e){if(request===scanVersion)notice(e.message,true);}
+  finally {if(request===scanVersion){$('scan').disabled=false;$('refresh').disabled=false;}}
 }
 async function load(id) {
   selected=id;fileList();const request=++loadVersion;notice('正在读取…');
-  try {const trace=await api('/api/trace?id='+encodeURIComponent(id));if(request!==loadVersion)return;render(trace);}
+  try {const trace=await api('/api/trace?id='+encodeURIComponent(id)+'&'+rootsQuery(activeRoots));if(request!==loadVersion)return;render(trace);}
   catch(e){if(request!==loadVersion)return;notice(e.message,true);$('title').textContent='无法读取此日志';$('subtitle').textContent=files.find(f=>f.id===id)?.name||'';$('metrics').replaceChildren();$('coverage').textContent='';$('timeline').replaceChildren();$('source-section').hidden=true;}
 }
 function attemptCard(e) {
@@ -92,4 +115,12 @@ function render(trace) {
   if(outside.length)$('timeline').append(extra('会话信息 / 运行状态 / 轮次外事件',outside));
   $('source-section').hidden=false;$('source').textContent=trace.events.map(e=>JSON.stringify(e)).join('\n');
 }
-$('refresh').addEventListener('click',refresh);$('search').addEventListener('input',fileList);refresh();
+$('refresh').addEventListener('click',()=>refresh());
+$('scan-form').addEventListener('submit',event=>{
+  event.preventDefault();
+  const roots=$('scan-roots').value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
+  $('search').value='';
+  refresh(roots);
+});
+$('search').addEventListener('input',fileList);
+refresh();

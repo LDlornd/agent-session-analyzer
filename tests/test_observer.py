@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import urlopen
+from urllib.parse import urlencode
 
 from agent_session_analyzer.adapters.dsh import DshAdapter
 from agent_session_analyzer.reader import parse_jsonl, read_trace, summarize
@@ -116,6 +117,40 @@ class ObserverTest(unittest.TestCase):
             self.assertEqual(len(trace["warnings"]),1)
         with self.assertRaises(ValueError):
             parse_jsonl('{broken}\n{}\n')
+
+    def test_viewer_custom_roots_and_empty_selection(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with DshRecorder(folder) as recorder:
+                recorder.run(FakeHarness(), "test")
+            server = TraceServer(("127.0.0.1", 0), [])
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            query = urlencode([("root", folder), ("root", folder)])
+            try:
+                with urlopen(base + "/api/files") as response:
+                    self.assertEqual(json.load(response), {"files": [], "roots": []})
+                with urlopen(base + "/api/files?" + query) as response:
+                    listing = json.load(response)
+                self.assertEqual(len(listing["roots"]), 1)
+                self.assertEqual(len(listing["files"]), 1)
+                key = listing["files"][0]["id"]
+                with urlopen(base + "/api/trace?" + query + "&id=" + key) as response:
+                    self.assertEqual(json.load(response)["summary"]["tools"], 2)
+                with urlopen(base + "/api/files?root=") as response:
+                    self.assertEqual(json.load(response)["files"], [])
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(base + "/api/trace?root=&id=" + key)
+                self.assertEqual(error.exception.code, 404)
+                missing = urlencode({"root": str(Path(folder) / "missing")})
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(base + "/api/files?" + missing)
+                self.assertEqual(error.exception.code, 400)
+                self.assertEqual(server.roots, [])  # Requests do not mutate other tabs' roots.
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
 
     def test_viewer_serves_only_catalogued_files(self):
         with tempfile.TemporaryDirectory() as folder:

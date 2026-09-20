@@ -59,9 +59,9 @@ recorder.run(harness, "解释调度模块", session_id="project-analysis")
 agent-session-analyzer
 ```
 
-打开 **http://127.0.0.1:8765**。默认读取当前工作目录下的 `logs/harness` 和 `config/dsh/sessions`，点击刷新更新文件和当前轨迹。
+打开 **http://127.0.0.1:8765**。启动时不设置默认扫描目录。在页面左侧填写目录路径（每行一个），点击“扫描目录”递归读取 JSONL；可随时修改，无需重启服务。清空后扫描会清空文件列表。路径指向运行查看器的电脑，相对路径以服务启动目录为基准。刷新按钮重新扫描已应用的目录。
 
-指定目录及端口：
+也可以通过命令行预填目录及指定端口（页面中仍可修改）：
 
 ```bash
 agent-session-analyzer --root ./logs/harness --root ./config/dsh/sessions --port 8766
