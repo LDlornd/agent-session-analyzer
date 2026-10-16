@@ -76,6 +76,81 @@ def read_trace(path: str | Path) -> dict:
             "format": fmt, "file": path.name}
 
 
+def _label(value) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, dict):
+        return next((_label(value[key]) for key in ("name", "title", "id")
+                     if _label(value.get(key))), "")
+    return ""
+
+
+def _input_text(value) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(filter(None, (_input_text(item) for item in value
+                         if not isinstance(item, dict) or item.get("role") in (None, "user"))))
+    if isinstance(value, dict):
+        return _input_text(value.get("content") or value.get("text"))
+    return ""
+
+
+def trace_metadata(trace: dict, path: str | Path) -> dict:
+    """Use recorded labels first; infer only the known experiment/trials layout."""
+    header = trace.get("header") or {}
+    events = trace.get("events", [])
+    recording = next((event for event in events if event.get("event") == "session.recording"), {})
+    recording_data = recording.get("data") or {}
+    if not isinstance(recording_data, dict):
+        raise ValueError("session.recording 的 data 必须是 JSON 对象")
+    metadata = recording_data.get("metadata") or header.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    title = next((_label(metadata.get(key)) for key in ("task_name", "task", "task_id")
+                  if _label(metadata.get(key))), "")
+    experiment = next((_label(metadata.get(key)) for key in ("experiment_name", "experiment", "experiment_id")
+                       if _label(metadata.get(key))), "")
+    # This also works when the selected scan root is inside one trial.
+    for parent in Path(path).parents:
+        if parent.name == "trials":
+            experiment = experiment or parent.parent.name
+            break
+    models, configured_models, harnesses = set(), set(), set()
+    task_input = ""
+    for event in events:
+        data = event.get("data") or {}
+        if not isinstance(data, dict):
+            raise ValueError("事件 data 必须是 JSON 对象")
+        harness = _label(event.get("harness"))
+        if harness:
+            harnesses.add(harness)
+        model = event.get("model") or data.get("model") or {}
+        name = _label(model.get("model") if isinstance(model, dict) else model)
+        if name:
+            configured_models.add(name)
+            if event.get("event") == "model.attempt":
+                models.add(name)
+        if not task_input:
+            if event.get("event") in ("run.started", "turn/start"):
+                task_input = _input_text(data.get("input"))
+            elif event.get("event") == "user/message":
+                task_input = _input_text(data.get("content") or data.get("message"))
+    if not title and task_input:
+        title = next((line.strip().lstrip("# ") for line in task_input.splitlines()
+                      if line.strip().lstrip("# ")), "")
+        if len(title) > 120:
+            title = title[:120] + "…"
+    if not harnesses and trace.get("format") == "dsh/session-v3":
+        harnesses.add("dsh")
+    return {"title": title or "未命名任务", "task_id": _label(metadata.get("task_id")),
+            "harness": " / ".join(sorted(harnesses)) or "未知 Harness",
+            "models": sorted(models or configured_models) or ["未知模型"],
+            "experiment": experiment or "未标注实验"}
+
+
 def summarize(trace: dict) -> dict:
     """Sum only normalized model settlements; null remains distinct from zero."""
     events = trace["events"]

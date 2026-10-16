@@ -4,11 +4,38 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .reader import read_trace, summarize
+from .reader import read_trace, summarize, trace_metadata
+
+
+def choose_directory() -> str:
+    # Tk must run on its own main thread, outside the HTTP request threads.
+    script = """
+import json
+import tkinter as tk
+from tkinter import filedialog
+
+root = tk.Tk()
+root.withdraw()
+root.attributes("-topmost", True)
+try:
+    path = filedialog.askdirectory(parent=root, title="选择 JSONL 扫描目录", mustexist=True)
+    print(json.dumps(path))
+finally:
+    root.destroy()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, encoding="utf-8", errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
+    if result.returncode:
+        raise OSError("无法打开系统目录窗口：请使用带 tkinter 和图形桌面的 Python。\n" + result.stderr.strip())
+    return json.loads(result.stdout)
 
 
 class TraceServer(ThreadingHTTPServer):
@@ -66,6 +93,22 @@ class TraceHandler(BaseHTTPRequestHandler):
                 roots.append(root)
         return roots
 
+    def do_POST(self):
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin")
+        if (host.split(":", 1)[0] not in ("127.0.0.1", "localhost")
+                or (origin is not None and origin != f"http://{host}")
+                or self.headers.get("X-Trace-Viewer") != "1"):
+            self.send(403, {"error": "Only same-origin loopback access is allowed"})
+            return
+        if self.path != "/api/choose-directory":
+            self.send(404, {"error": "Not found"})
+            return
+        try:
+            self.send(200, {"path": choose_directory()})
+        except (ValueError, OSError) as error:
+            self.send(400, {"error": str(error)})
+
     def do_GET(self):
         host = self.headers.get("Host", "").split(":", 1)[0]
         if host not in ("127.0.0.1", "localhost"):
@@ -82,7 +125,14 @@ class TraceHandler(BaseHTTPRequestHandler):
             elif url.path == "/api/files":
                 roots = self.requested_roots(url.query)
                 entries = self.server.catalog(roots)
-                files = [{k: v for k, v in item.items() if k != "path"} for item in entries.values()]
+                files = []
+                for item in entries.values():
+                    entry = {k: v for k, v in item.items() if k != "path"}
+                    try:
+                        entry.update(trace_metadata(read_trace(item["path"]), item["path"]))
+                    except (ValueError, OSError) as error:
+                        entry.update(trace_metadata({}, item["path"]), error=str(error))
+                    files.append(entry)
                 self.send(200, {"files": sorted(files, key=lambda x: x["modified_ms"], reverse=True),
                                 "roots": [str(p) for p in roots]})
             elif url.path == "/api/trace":
@@ -93,6 +143,7 @@ class TraceHandler(BaseHTTPRequestHandler):
                     return
                 trace = read_trace(entry["path"])
                 trace["summary"] = summarize(trace)
+                trace["metadata"] = trace_metadata(trace, entry["path"])
                 self.send(200, trace)
             else:
                 self.send(404, {"error": "Not found"})
@@ -102,7 +153,7 @@ class TraceHandler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="本地 harness JSONL 查看器")
-    parser.add_argument("--root", action="append", help="预填日志目录，可重复传入；未指定时在网页中填写")
+    parser.add_argument("--root", action="append", help="日志目录，可重复传入；未指定时在网页中点击选择")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     roots = args.root or []

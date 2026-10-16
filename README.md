@@ -59,9 +59,11 @@ recorder.run(harness, "解释调度模块", session_id="project-analysis")
 agent-session-analyzer
 ```
 
-打开 **http://127.0.0.1:8765**。启动时不设置默认扫描目录。在页面左侧填写目录路径（每行一个），点击“扫描目录”递归读取 JSONL；可随时修改，无需重启服务。清空后扫描会清空文件列表。路径指向运行查看器的电脑，相对路径以服务启动目录为基准。刷新按钮重新扫描已应用的目录。
+打开 **http://127.0.0.1:8765**。启动时不设置默认扫描目录。点击左侧“选择扫描目录…”，在系统目录窗口中选择日志目录，随后自动递归扫描 JSONL。可继续添加多个目录，也可以逐个移除；移除全部目录后清空列表。取消选择不会改变扫描目录。刷新按钮重新扫描已选择的目录。
 
-也可以通过命令行预填目录及指定端口（页面中仍可修改）：
+目录窗口由运行查看器的 Python 在本机桌面打开，需要 Python 自带的 `tkinter` 和图形桌面；Windows 官方 Python 安装通常包含它。窗口不会上传文件，路径和文件仍由本地服务读取。无图形桌面时可继续使用下面的 `--root` 参数。
+
+也可以通过命令行指定初始目录及端口（页面中仍可添加或移除）：
 
 ```bash
 agent-session-analyzer --root ./logs/harness --root ./config/dsh/sessions --port 8766
@@ -69,7 +71,27 @@ agent-session-analyzer --root ./logs/harness --root ./config/dsh/sessions --port
 
 也支持 `python -m agent_session_analyzer`。在 uv 项目中可使用 `uv run agent-session-analyzer`。
 
-查看器只监听本机，不上传文件，不需要 CDN。可筛选文件，展开 turn/step、思考文本、工具参数、工具结果和原始事件。单文件上限 100 MiB；暂不读取 `.zstd` 或旧版 dsh 日志。
+查看器只监听本机，不上传文件，不需要 CDN。文件按 **Harness → 模型 → 实验** 分组，可展开、折叠，并组合使用三个分类筛选和搜索。列表和详情标题显示任务名称，文件名与会话 ID 仍作为辅助信息保留。一个 trace 使用多个模型时，会出现在各自的模型分组中；总数按文件去重。展开 trace 后仍可查看 turn/step、思考文本、工具参数、工具结果和原始事件。
+
+分类信息从日志读取，不需要重录旧 trace：
+
+- Harness 来自事件的 `harness`（原生 dsh v3 自动识别）；模型优先使用实际模型尝试中的名称，没有尝试时使用记录的配置。
+- 任务名称依次读取 `session.recording.data.metadata` 中的 `task_name`、`task`、`task_id`；都没有时使用首次任务输入的第一行，最多 120 字。没有可用任务文本时显示“未命名任务”。
+- 实验依次读取同一 `metadata` 中的 `experiment_name`、`experiment`、`experiment_id`；没有时识别路径中的 `<实验目录>/trials/...`，其余显示“未标注实验”。`task` 和 `experiment` 也可以是含 `name`、`title` 或 `id` 的对象。
+- 搜索覆盖任务名称、任务 ID、Harness、模型、实验和文件路径。无法读取的文件保留在列表中并显示错误，不影响其他 trace。
+
+后续录制时，可用已有的 `metadata` 参数明确标注任务和实验（两个 recorder 都支持）：
+
+```python
+with DshRecorder("./logs/harness", metadata={
+    "task_name": "3D 扫描体积计算",
+    "task_id": "3d-scan-calc",
+    "experiment_name": "skillsbench-with-skill",
+}) as recorder:
+    result = recorder.run(harness, prompt)
+```
+
+扫描时会读取每个文件提取分类信息。单文件上限 100 MiB；暂不读取 `.zstd` 或旧版 dsh 日志。
 
 ## 数据协议与统计口径
 

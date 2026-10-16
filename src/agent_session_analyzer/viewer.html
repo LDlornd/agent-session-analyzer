@@ -4,14 +4,19 @@
 <body>
 <aside>
   <div class="brand"><span class="brand-icon">▤</span><div>Harness Trace<small>运行记录</small></div></div>
-  <form id="scan-form">
-    <label for="scan-roots">扫描目录</label>
-    <textarea id="scan-roots" rows="3" placeholder="输入目录路径，每行一个" aria-describedby="scan-help"></textarea>
-    <small id="scan-help">填写运行查看器的电脑上的路径，递归扫描 JSONL。</small>
-    <button id="scan" type="submit">扫描目录</button>
-  </form>
+  <section class="scan-controls" aria-label="扫描目录">
+    <button id="choose-root" type="button">选择扫描目录…</button>
+    <small id="scan-help">通过系统窗口选择目录，自动递归扫描 JSONL；可添加多个目录。</small>
+    <ul id="selected-roots" aria-label="已选择的扫描目录"></ul>
+  </section>
   <div class="side-heading"><span>已保存的会话</span><button id="refresh" title="刷新文件与当前会话">刷新</button></div>
-  <input id="search" type="search" placeholder="筛选文件名…" aria-label="筛选文件名">
+  <input id="search" type="search" placeholder="搜索任务、实验、模型或文件名…" aria-label="搜索会话">
+  <div class="filters" aria-label="分类筛选">
+    <label>Harness<select id="filter-harness"><option value="">全部 Harness</option></select></label>
+    <label>模型<select id="filter-model"><option value="">全部模型</option></select></label>
+    <label>实验<select id="filter-experiment"><option value="">全部实验</option></select></label>
+  </div>
+  <small id="file-count" aria-live="polite"></small>
   <nav id="files" aria-label="会话文件"></nav>
   <details class="roots"><summary>读取目录</summary><pre id="roots"></pre></details>
 </aside>

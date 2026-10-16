@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let files = [], selected = null, loadVersion = 0, scanVersion = 0, activeRoots = null;
+const groupState = new Map();
 const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN');
 const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 function el(tag, cls, text) { const n=document.createElement(tag); if(cls)n.className=cls; if(text!=null)n.textContent=text; return n; }
@@ -9,15 +10,79 @@ function notice(text, error=false) { $('message').replaceChildren(); if(text)$('
 function extra(title, value) { const d=el('details','extra');d.append(el('summary','',title),el('pre','',pretty(value)));return d; }
 function block(parent,title,value,cls='answer') { parent.append(el('div','block-title',title),el('div',cls,value == null ? '未提供' : value)); }
 function duration(start,end) { return start != null && end != null && end>=start ? ((end-start)/1000).toFixed(2)+' s' : '耗时未知'; }
-async function api(url) { const r=await fetch(url); const data=await r.json(); if(!r.ok)throw new Error(data.error||r.statusText); return data; }
-function fileList() {
-  $('files').replaceChildren(); const q=$('search').value.toLowerCase();
-  for(const f of files.filter(f=>f.name.toLowerCase().includes(q))) {
-    const b=el('button','file'+(selected===f.id?' active':''),f.name);
-    b.title=f.root+' / '+f.name; b.append(el('small','',new Date(f.modified_ms).toLocaleString('zh-CN')+' · '+(f.size/1024).toFixed(1)+' KB'));
-    b.addEventListener('click',()=>load(f.id)); $('files').append(b);
+async function api(url, options) { const r=await fetch(url, options); const data=await r.json(); if(!r.ok)throw new Error(data.error||r.statusText); return data; }
+function updateFilters() {
+  for(const [id,values,label] of [
+    ['filter-harness',files.map(f=>f.harness),'全部 Harness'],
+    ['filter-model',files.flatMap(f=>f.models),'全部模型'],
+    ['filter-experiment',files.map(f=>f.experiment),'全部实验']
+  ]) {
+    const select=$(id), previous=select.value;
+    select.replaceChildren(new Option(label,''));
+    for(const value of [...new Set(values)].sort((a,b)=>a.localeCompare(b,'zh-CN')))select.add(new Option(value,value));
+    if(values.includes(previous))select.value=previous;
   }
+}
+function fileButton(f) {
+  const b=el('button','file'+(selected===f.id?' active':''));
+  b.setAttribute('aria-pressed',String(selected===f.id));
+  b.title=`${f.title}\n${f.root} / ${f.name}`;
+  b.append(el('span','file-title',f.title),el('small','file-path',f.name));
+  b.append(el('small','',new Date(f.modified_ms).toLocaleString('zh-CN')+' · '+(f.size/1024).toFixed(1)+' KB'));
+  if(f.error)b.append(el('small','file-error',f.error));
+  b.addEventListener('click',()=>load(f.id));return b;
+}
+function fileGroups(parent, items, depth=0, path=[]) {
+  if(depth===3) { for(const f of items)parent.append(fileButton(f));return; }
+  const groups=new Map();
+  for(const f of items) {
+    const labels=depth===0?[f.harness]:depth===1?f.models:[f.experiment];
+    for(const label of labels) {
+      if(depth===1&&$('filter-model').value&&label!==$('filter-model').value)continue;
+      if(!groups.has(label))groups.set(label,[]);
+      groups.get(label).push(f);
+    }
+  }
+  for(const [label,rows] of [...groups].sort(([a],[b])=>a.localeCompare(b,'zh-CN'))) {
+    const key=JSON.stringify([...path,label]), group=el('details','file-group');
+    group.open=groupState.get(key)??true;
+    const head=el('summary','');
+    head.append(el('span','',label),el('small','',rows.length));group.append(head);
+    group.addEventListener('toggle',()=>groupState.set(key,group.open));
+    fileGroups(group,rows,depth+1,[...path,label]);parent.append(group);
+  }
+}
+function fileList() {
+  $('files').replaceChildren(); const q=$('search').value.trim().toLowerCase();
+  const harness=$('filter-harness').value, model=$('filter-model').value, experiment=$('filter-experiment').value;
+  const visible=files.filter(f=>(!harness||f.harness===harness)&&(!model||f.models.includes(model))&&
+    (!experiment||f.experiment===experiment)&&[f.title,f.task_id,f.name,f.root,f.harness,...f.models,f.experiment].join(' ').toLowerCase().includes(q));
+  $('file-count').textContent=`${visible.length} / ${files.length} 个 trace · Harness → 模型 → 实验`;
+  fileGroups($('files'),visible);
   if(!$('files').childElementCount)$('files').append(el('p','muted',files.length?'没有匹配的文件':'目录中还没有 JSONL 文件'));
+}
+function showRoots() {
+  $('selected-roots').replaceChildren();
+  for(const root of activeRoots||[]) {
+    const row=el('li',''), label=el('span','',root), remove=el('button','remove-root','移除');
+    label.title=root;remove.type='button';remove.setAttribute('aria-label','移除目录 '+root);
+    remove.addEventListener('click',()=>refresh(activeRoots.filter(value=>value!==root)));
+    row.append(label,remove);$('selected-roots').append(row);
+  }
+  $('roots').textContent=activeRoots?.join('\n')||'尚未设置';
+}
+function scanBusy(busy) {
+  $('choose-root').disabled=busy;$('refresh').disabled=busy;
+  for(const button of document.querySelectorAll('.remove-root'))button.disabled=busy;
+}
+async function chooseRoot() {
+  scanBusy(true);notice('请在系统窗口中选择扫描目录…');
+  try {
+    const data=await api('/api/choose-directory',{method:'POST',headers:{'X-Trace-Viewer':'1'}});
+    if(!data.path) {notice('已取消选择目录');return;}
+    await refresh([...new Set([...(activeRoots||[]),data.path])]);
+  } catch(e){notice(e.message,true);}
+  finally {scanBusy(false);}
 }
 function rootsQuery(roots) {
   if(roots===null)return '';
@@ -31,23 +96,22 @@ function clearTrace() {
 }
 async function refresh(roots=activeRoots) {
   const request=++scanVersion;++loadVersion;
-  $('scan').disabled=true;$('refresh').disabled=true;notice('正在扫描…');
+  scanBusy(true);notice('正在扫描…');
   try {
     const data=await api('/api/files?'+rootsQuery(roots));
     if(request!==scanVersion)return;
     ++loadVersion;activeRoots=data.roots;files=data.files;
-    if(roots===null)$('scan-roots').value=activeRoots.join('\n');
-    $('roots').textContent=activeRoots.join('\n')||'尚未设置';fileList();
+    showRoots();scanBusy(true);updateFilters();fileList();
     if(selected&&files.some(f=>f.id===selected))await load(selected);
     else if(files.length)await load(files[0].id);
     else {
       clearTrace();fileList();
-      $('title').textContent=activeRoots.length?'暂无运行记录':'请设置扫描目录';
-      $('subtitle').textContent=activeRoots.length?'目录中没有 JSONL 文件，可修改路径后重新扫描。':'在左侧输入目录路径，点击“扫描目录”。';
-      $('timeline').append(el('div','empty','支持多个目录，每行一个。'));notice('');
+      $('title').textContent=activeRoots.length?'暂无运行记录':'请选择扫描目录';
+      $('subtitle').textContent=activeRoots.length?'目录中没有 JSONL 文件，可选择其他目录。':'点击左侧“选择扫描目录…”，在系统窗口中选择日志目录。';
+      $('timeline').append(el('div','empty','可添加多个目录；按 Harness、模型和实验查找任务。'));notice('');
     }
   } catch(e){if(request===scanVersion)notice(e.message,true);}
-  finally {if(request===scanVersion){$('scan').disabled=false;$('refresh').disabled=false;}}
+  finally {if(request===scanVersion)scanBusy(false);}
 }
 async function load(id) {
   selected=id;fileList();const request=++loadVersion;notice('正在读取…');
@@ -85,7 +149,9 @@ function toolCard(call,result) {
   body.append(extra('原始调用 / 结果事件',{call:call?.raw,result:result?.raw}));card.append(body);return card;
 }
 function render(trace) {
-  $('title').textContent=trace.session_id||'未知 session';$('subtitle').textContent=trace.format+' · '+trace.file;
+  const metadata=trace.metadata;
+  $('title').textContent=metadata.title;
+  $('subtitle').textContent=`${metadata.harness} · ${metadata.models.join(' / ')} · ${metadata.experiment}\n${trace.format} · ${trace.file} · Session: ${trace.session_id||'未知'}`;
   const failures=trace.events.filter(e=>e.event==='run.failed').map(e=>`运行异常：${e.data?.error_type||''} ${e.data?.message||''}`);
   const captureWarnings=trace.events.filter(e=>e.event==='capture.warning').map(e=>e.data?.message).filter(Boolean);
   notice([...trace.warnings,...failures,...new Set(captureWarnings)].join('\n'),failures.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;
@@ -116,11 +182,7 @@ function render(trace) {
   $('source-section').hidden=false;$('source').textContent=trace.events.map(e=>JSON.stringify(e)).join('\n');
 }
 $('refresh').addEventListener('click',()=>refresh());
-$('scan-form').addEventListener('submit',event=>{
-  event.preventDefault();
-  const roots=$('scan-roots').value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
-  $('search').value='';
-  refresh(roots);
-});
+$('choose-root').addEventListener('click',chooseRoot);
+for(const id of ['filter-harness','filter-model','filter-experiment'])$(id).addEventListener('change',fileList);
 $('search').addEventListener('input',fileList);
 refresh();
