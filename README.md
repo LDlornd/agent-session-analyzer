@@ -59,7 +59,7 @@ recorder.run(harness, "解释调度模块", session_id="project-analysis")
 agent-session-analyzer
 ```
 
-打开 **http://127.0.0.1:8765**。启动时不设置默认扫描目录。点击左侧“选择扫描目录…”，在系统目录窗口中选择日志目录，随后自动递归扫描 JSONL。可继续添加多个目录，也可以逐个移除；移除全部目录后清空列表。取消选择不会改变扫描目录。刷新按钮重新扫描已选择的目录。
+打开 **http://127.0.0.1:8765**。启动时不设置默认扫描目录。点击左侧“选择扫描目录…”，在系统目录窗口中选择日志目录。查看器先识别实验目录，再按实验结构发现 trace；实验目录外递归查找独立 JSONL。可继续添加多个目录，也可以逐个移除；移除全部目录后清空列表。取消选择不会改变扫描目录。刷新按钮重新扫描已选择的目录。
 
 目录窗口由运行查看器的 Python 在本机桌面打开，需要 Python 自带的 `tkinter` 和图形桌面；Windows 官方 Python 安装通常包含它。窗口不会上传文件，路径和文件仍由本地服务读取。无图形桌面时可继续使用下面的 `--root` 参数。
 
@@ -81,7 +81,7 @@ agent-session-analyzer --root ./logs/harness --root ./config/dsh/sessions --port
 
 - Harness 来自事件的 `harness`（原生 dsh v3 自动识别）；模型优先使用实际模型尝试中的名称，没有尝试时使用记录的配置。如果响应只返回短名称，且日志中存在唯一一个尾部完全匹配的带 provider 配置名称，则用配置名称分组，例如 `deepseek-flash` 归入 `deepseek/deepseek-flash`。有多个匹配项或名称不一致时不合并；时间线及 raw 中的响应模型名保持原值。
 - 任务名称依次读取 `session.recording.data.metadata` 中的 `task_name`、`task`、`task_id`；都没有时使用首次任务输入的第一行，最多 120 字。没有可用任务文本时显示“未命名任务”。
-- 实验依次读取同一 `metadata` 中的 `experiment_name`、`experiment`、`experiment_id`；没有时识别路径中的 `<实验目录>/trials/...`，其余显示“独立运行”。`task` 和 `experiment` 也可以是含 `name`、`title` 或 `id` 的对象。
+- 实验目录通过 `manifest.json` 的协议特征识别：`schema_version=1` 和 `config.conditions` 列表；随后只按 `trials/` 下的约定发现 trace，不依赖文件夹名称或 `results.jsonl` 是否生成。实验 trace 使用该目录的当前名称。仅有 `trials` 路径不能证明属于实验；独立 trace 仍依次读取同一 `metadata` 中的 `experiment_name`、`experiment`、`experiment_id`，其余显示“独立运行”。`task` 和 `experiment` 也可以是含 `name`、`title` 或 `id` 的对象。
 - 搜索覆盖任务名称、任务 ID、Harness、模型、实验和文件路径。无法读取的文件保留在列表中并显示错误，不影响其他 trace。
 
 后续录制时，可用已有的 `metadata` 参数明确标注任务和实验（两个 recorder 都支持）：
@@ -101,7 +101,10 @@ with DshRecorder("./logs/harness", metadata={
 
 ### 实验结果与 condition 对比
 
-选择包含 `manifest.json` 和 `results.jsonl` 的实验目录，或它们共同的上级日志目录。
+选择包含实验 `manifest.json` 的目录，或其上级日志目录。
+可以在实验结束后重命名结果文件夹，例如 `skillsbench-openhands-10 采样实验`；
+重新扫描后，对比区和 trace 分组使用新文件夹名，忽略配置或日志中记录的旧实验名称。
+若扫描目录直接指向已重命名的文件夹，需要重新选择新路径；选择其上级目录则只需刷新。
 页面会显示实验选择、任务筛选、condition 指标汇总和按 `task_id + repeat` 配对的横向对比表，
 可直接打开每个 trial 的 trace。各指标均显示已知样本数 / 已记录样本数，缺失不当作零；
 耗时是整个 trial 的准备、执行、评分及清理耗时。不同实验目录独立配对。
@@ -113,9 +116,15 @@ with DshRecorder("./logs/harness", metadata={
 目前支持 `schema_version=1` 的 Evaluation 结果。每行包含 `trial_id`、`task_id`、
 `condition`、整数 `repeat`，可提供 `reward`、`status`、`duration_sec`、`model` 和 `agent`。
 `manifest.config.conditions` 提供条件列表。condition 名称没有固定限制。
-`trace_path` 相对 `trials/<trial_id>/`，也接受位于扫描目录内的绝对路径；
-旧结果默认关联 `trials/<trial_id>/agent/events.jsonl`。显式指定标准 trace 后，
-该 trial 的原生 `agent/events.jsonl` 不重复列出。结果和工具调用辅助 JSONL 不作为会话显示。
+`trace_path` 相对 `trials/<trial_id>/`，也接受位于扫描目录内的绝对路径。
+识别实验后，只按 trial 约定读取 trace：保留 `agent/trace/*.jsonl` 和有效的显式引用；
+没有标准 trace 时才读取旧版 `agent/events.jsonl`。标准 trace 与原生 events 不重复展示，
+这一规则不依赖 trial 是否完成。显式引用缺失或越界会显示错误，不改用其他文件作为该结果的入口。
+未显式指定入口且存在多个标准 trace 时，可从会话列表分别打开，不随意选择其中一个关联结果。
+实验内不再把结果、工具调用或任务目录中的任意 JSONL 当作会话扫描。
+
+运行中或中断的实验可以没有 `results.jsonl`，已保存的 trace 仍按实验归类；
+没有结果记录的 trial 会明确标注，不补造 reward、状态或累计用量，也不计入已记录结果的汇总。
 
 汇总优先读取 `agent.usage` 中的 `input_tokens`、`output_tokens`、`total_tokens`、
 `cache_read_tokens`、`cache_write_tokens`、`reasoning_tokens`、`cost_usd`，
@@ -124,7 +133,8 @@ with DshRecorder("./logs/harness", metadata={
 时间线保留未知，只在独立的 trial 汇总栏显示结果中的累计用量，不向各步分摊。
 
 已有标准 trace 和原生 dsh 文件不要求实验目录，仍可独立查看。扫描范围只选到一个
-`agent/trace` 子目录时，可以查看 trace，但完整实验对比需要选中包含结果文件的实验目录。
+`agent/trace` 子目录时，会读取所属实验的 manifest 识别分组，但 trace 和结果内容仍只读取所选范围；
+完整实验对比需要选中包含结果文件的实验目录。
 这些读取路径没有导入 OpenHands / BenchFlow SDK。新 harness 输出相同 trace 和结果约定，
 即可复用页面；格式适配仍放在 `adapters/`，采集与回调放在 `recorders/`。
 

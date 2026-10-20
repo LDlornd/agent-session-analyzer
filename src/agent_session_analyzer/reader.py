@@ -144,8 +144,8 @@ def _input_text(value) -> str:
     return ""
 
 
-def trace_metadata(trace: dict, path: str | Path, *, trial: dict | None = None) -> dict:
-    """Use recorded labels first; infer only the known experiment/trials layout."""
+def trace_metadata(trace: dict, *, trial: dict | None = None) -> dict:
+    """Use current experiment directory names; keep standalone recording labels."""
     header = trace.get("header") or {}
     events = trace.get("events", [])
     recording = next((event for event in events if event.get("event") == "session.recording"), {})
@@ -155,8 +155,8 @@ def trace_metadata(trace: dict, path: str | Path, *, trial: dict | None = None) 
     metadata = recording_data.get("metadata") or header.get("metadata") or {}
     if not isinstance(metadata, dict):
         metadata = {}
-    # Result artifacts are authoritative for trial identity; embedded metadata
-    # also works for standalone recordings without any experiment artifacts.
+    # Discovered experiment context owns trial identity; embedded metadata
+    # still provides labels for standalone recordings.
     metadata = {**metadata, **{k: v for k, v in (trial or {}).items()
                               if k in {"task_id", "experiment_id", "experiment_name",
                                        "trial_id", "condition", "repeat"} and v is not None}}
@@ -164,11 +164,6 @@ def trace_metadata(trace: dict, path: str | Path, *, trial: dict | None = None) 
                   if _label(metadata.get(key))), "")
     experiment = next((_label(metadata.get(key)) for key in ("experiment_name", "experiment", "experiment_id")
                        if _label(metadata.get(key))), "")
-    # This also works when the selected scan root is inside one trial.
-    for parent in Path(path).parents:
-        if parent.name == "trials":
-            experiment = experiment or parent.parent.name
-            break
     models, configured_models, harnesses = set(), set(), set()
     task_input = ""
     for event in events:

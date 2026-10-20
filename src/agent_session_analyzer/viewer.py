@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .experiments import load_experiments, path_id
+from .experiments import discover_sources, path_id
 from .reader import UnsupportedTraceFormat, read_trace, summarize, trace_metadata
 
 
@@ -45,27 +45,17 @@ class TraceServer(ThreadingHTTPServer):
         self.roots = [Path(p).resolve() for p in roots]
         super().__init__(address, TraceHandler)
 
-    def catalog(self, roots=None):
-        entries = {}
-        for root in (self.roots if roots is None else roots):
-            if not root.is_dir():
-                continue
-            for path in root.rglob("*.jsonl"):
-                resolved = path.resolve()
-                if not resolved.is_relative_to(root) or not resolved.is_file():
-                    continue
-                stat = resolved.stat()
-                key = path_id(resolved)
-                entries[key] = {"id": key, "name": str(resolved.relative_to(root)),
-                                "root": str(root), "size": stat.st_size,
-                                "modified_ms": int(stat.st_mtime * 1000), "path": resolved}
-        return entries
-
     def inventory(self, roots):
-        entries = self.catalog(roots)
-        experiments, contexts, hidden = load_experiments([e["path"] for e in entries.values()], roots)
-        entries = {key: {**entry, "trial": contexts.get(entry["path"])}
-                   for key, entry in entries.items() if entry["path"] not in hidden}
+        paths, experiments, contexts = discover_sources(roots)
+        entries = {}
+        for path in paths:
+            root = next(root for root in roots if path.is_relative_to(root))
+            stat = path.stat()
+            key = path_id(path)
+            entries[key] = {"id": key, "name": str(path.relative_to(root)),
+                            "root": str(root), "size": stat.st_size,
+                            "modified_ms": int(stat.st_mtime * 1000), "path": path,
+                            "trial": contexts.get(path)}
         return entries, experiments
 
 
@@ -137,11 +127,11 @@ class TraceHandler(BaseHTTPRequestHandler):
                     entry = {k: v for k, v in item.items() if k != "path"}
                     try:
                         trace = read_trace(item["path"], trial=item["trial"])
-                        entry.update(trace_metadata(trace, item["path"], trial=item["trial"]))
+                        entry.update(trace_metadata(trace, trial=item["trial"]))
                     except UnsupportedTraceFormat:
                         continue  # results/tool-call logs are not session traces.
                     except (ValueError, OSError, TypeError, AttributeError, KeyError) as error:
-                        entry.update(trace_metadata({}, item["path"], trial=item["trial"]), error=str(error))
+                        entry.update(trace_metadata({}, trial=item["trial"]), error=str(error))
                     files.append(entry)
                 self.send(200, {"files": sorted(files, key=lambda x: x["modified_ms"], reverse=True),
                                 "roots": [str(p) for p in roots], "experiments": experiments})
@@ -154,7 +144,7 @@ class TraceHandler(BaseHTTPRequestHandler):
                     return
                 trace = read_trace(entry["path"], trial=entry["trial"])
                 trace["summary"] = summarize(trace)
-                trace["metadata"] = trace_metadata(trace, entry["path"], trial=entry["trial"])
+                trace["metadata"] = trace_metadata(trace, trial=entry["trial"])
                 trace["trial"] = entry["trial"]
                 self.send(200, trace)
             else:

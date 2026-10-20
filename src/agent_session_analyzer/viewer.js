@@ -148,7 +148,8 @@ function updateComparisonTasks() {
   const experiment=experiments.find(e=>e.id===$('compare-experiment').value);
   const select=$('compare-task'), previous=select.value;
   select.replaceChildren(new Option('全部任务',''));
-  for(const task of [...new Set((experiment?.trials||[]).map(t=>t.task_id))].sort())select.add(new Option(task,task));
+  const traceTasks=files.filter(f=>f.experiment_id===experiment?.id).map(f=>f.task_id);
+  for(const task of [...new Set([...(experiment?.trials||[]).map(t=>t.task_id),...traceTasks].filter(Boolean))].sort())select.add(new Option(task,task));
   if([...select.options].some(o=>o.value===previous))select.value=previous;
   renderComparison();
 }
@@ -260,18 +261,20 @@ function render(trace) {
   $('title').textContent=metadata.title;
   $('subtitle').textContent=`${metadata.harness} · ${metadata.models.join(' / ')} · ${metadata.experiment}${metadata.condition?' · '+metadata.condition+' / repeat '+metadata.repeat:''}\n${trace.format} · ${trace.file} · Session: ${trace.session_id||'未知'}`;
   const trial=trace.trial;
-  if(trial&&experiments.some(e=>e.id===trial.experiment_id)) {
+  if(experiments.some(e=>e.id===metadata.experiment_id)) {
     const experimentSelect=$('compare-experiment');
-    if(experimentSelect.value!==trial.experiment_id) {
-      experimentSelect.value=trial.experiment_id;updateComparisonTasks();
+    if(experimentSelect.value!==metadata.experiment_id) {
+      experimentSelect.value=metadata.experiment_id;updateComparisonTasks();
     }
     const taskSelect=$('compare-task');
-    if(taskSelect.value&&taskSelect.value!==trial.task_id) {
-      taskSelect.value=trial.task_id;renderComparison();
+    if(taskSelect.value&&taskSelect.value!==metadata.task_id) {
+      taskSelect.value=metadata.task_id;renderComparison();
     }
   }
   $('trial-summary').hidden=!trial;
-  if(trial)$('trial-summary').textContent=`Trial 汇总：${trial.status} · reward ${fmt(trial.reward)} · 输入 / 输出 token ${fmt(trial.usage.input_tokens)} / ${fmt(trial.usage.output_tokens)} · 费用 USD ${fmt(trial.usage.cost_usd)} · 工具 ${fmt(trial.tool_calls)} · 全流程耗时 ${fmt(trial.duration_sec)} s。此处来自实验结果，不分摊到模型尝试。`;
+  if(trial)$('trial-summary').textContent=trial.result_recorded===false
+    ? `Trial ${trial.trial_id}：尚无结果记录，当前仅展示已保存的 trace；评分和累计用量不参与实验汇总。`
+    : `Trial 汇总：${trial.status} · reward ${fmt(trial.reward)} · 输入 / 输出 token ${fmt(trial.usage.input_tokens)} / ${fmt(trial.usage.output_tokens)} · 费用 USD ${fmt(trial.usage.cost_usd)} · 工具 ${fmt(trial.tool_calls)} · 全流程耗时 ${fmt(trial.duration_sec)} s。此处来自实验结果，不分摊到模型尝试。`;
   const failures=trace.events.filter(e=>e.event==='run.failed').map(e=>`运行异常：${e.data?.error_type||''} ${e.data?.message||''}`);
   const captureWarnings=trace.events.filter(e=>e.event==='capture.warning').map(e=>e.data?.message).filter(Boolean);
   notice([...trace.warnings,...failures,...new Set(captureWarnings)].join('\n'),failures.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;
