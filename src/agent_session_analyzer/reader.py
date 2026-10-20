@@ -35,11 +35,11 @@ def parse_jsonl(text: str) -> tuple[list[dict], list[str]]:
     return rows, warnings
 
 
-def _openhands_events(rows: list[dict], path: Path) -> tuple[str, list[dict]]:
+def _openhands_events(rows: list[dict], path: Path, trial: dict) -> tuple[str, list[dict]]:
     # Native callbacks omit the conversation ID. This ID identifies the source
     # file only; it must not be presented as an original SDK session ID.
     sid = "import-" + hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
-    adapter = OpenHandsAdapter(sid)
+    adapter = OpenHandsAdapter(sid, {"model": trial.get("model")})
     events = [adapter.row("session.recording", {
         "capture": "native OpenHands event import", "session_id_source": "file_path",
     })]
@@ -65,11 +65,12 @@ def _openhands_events(rows: list[dict], path: Path) -> tuple[str, list[dict]]:
             start[0]["data"]["boundary_source"] = "native_event_import"
             events.extend(start)
         events.extend(adapter.event(raw))
-    end_turn("unknown")
+    reason = trial.get("finish_reason") or "unknown"
+    end_turn("completed" if reason == "finished" else reason)
     return sid, events
 
 
-def read_trace(path: str | Path) -> dict:
+def read_trace(path: str | Path, *, trial: dict | None = None) -> dict:
     path = Path(path)
     if path.stat().st_size > MAX_FILE_BYTES:
         raise ValueError("文件超过 100 MiB，请按 session 拆分后查看")
@@ -112,7 +113,7 @@ def read_trace(path: str | Path) -> dict:
         fmt = "dsh/session-v3"
     elif (isinstance(first.get("kind"), str) and first["kind"].endswith("Event")
           and "id" in first and "timestamp" in first):
-        sid, events = _openhands_events(rows, path)
+        sid, events = _openhands_events(rows, path, trial or {})
         fmt = "openhands/events"
         warnings.append("原生事件导入：session ID 来自文件路径，turn 为推导边界；逐次 token、隐藏重试和精确 step 耗时不可恢复。")
     else:
@@ -143,7 +144,7 @@ def _input_text(value) -> str:
     return ""
 
 
-def trace_metadata(trace: dict, path: str | Path) -> dict:
+def trace_metadata(trace: dict, path: str | Path, *, trial: dict | None = None) -> dict:
     """Use recorded labels first; infer only the known experiment/trials layout."""
     header = trace.get("header") or {}
     events = trace.get("events", [])
@@ -154,6 +155,11 @@ def trace_metadata(trace: dict, path: str | Path) -> dict:
     metadata = recording_data.get("metadata") or header.get("metadata") or {}
     if not isinstance(metadata, dict):
         metadata = {}
+    # Result artifacts are authoritative for trial identity; embedded metadata
+    # also works for standalone recordings without any experiment artifacts.
+    metadata = {**metadata, **{k: v for k, v in (trial or {}).items()
+                              if k in {"task_id", "experiment_id", "experiment_name",
+                                       "trial_id", "condition", "repeat"} and v is not None}}
     title = next((_label(metadata.get(key)) for key in ("task_name", "task", "task_id")
                   if _label(metadata.get(key))), "")
     experiment = next((_label(metadata.get(key)) for key in ("experiment_name", "experiment", "experiment_id")
@@ -190,6 +196,8 @@ def trace_metadata(trace: dict, path: str | Path) -> dict:
             title = title[:120] + "…"
     if not harnesses and trace.get("format") == "dsh/session-v3":
         harnesses.add("dsh")
+    if not (models or configured_models) and trial and trial.get("model"):
+        configured_models.add(trial["model"])
     # Providers may return a bare name while the configured name is qualified,
     # e.g. deepseek-flash vs deepseek/deepseek-flash. Resolve only an exact,
     # unique suffix match; ambiguous or genuinely different names stay separate.
@@ -201,7 +209,10 @@ def trace_metadata(trace: dict, path: str | Path) -> dict:
     return {"title": title or "未命名任务", "task_id": _label(metadata.get("task_id")),
             "harness": " / ".join(sorted(harnesses)) or "未知 Harness",
             "models": sorted(labels) or ["未知模型"],
-            "experiment": experiment or "独立运行"}
+            "experiment": experiment or "独立运行",
+            "experiment_id": _label(metadata.get("experiment_id")),
+            "trial_id": _label(metadata.get("trial_id")),
+            "condition": _label(metadata.get("condition")), "repeat": metadata.get("repeat")}
 
 
 def summarize(trace: dict) -> dict:

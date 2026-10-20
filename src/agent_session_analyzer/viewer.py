@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import sys
@@ -10,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .experiments import load_experiments, path_id
 from .reader import UnsupportedTraceFormat, read_trace, summarize, trace_metadata
 
 
@@ -55,11 +55,18 @@ class TraceServer(ThreadingHTTPServer):
                 if not resolved.is_relative_to(root) or not resolved.is_file():
                     continue
                 stat = resolved.stat()
-                key = hashlib.sha256(str(resolved).encode()).hexdigest()
+                key = path_id(resolved)
                 entries[key] = {"id": key, "name": str(resolved.relative_to(root)),
                                 "root": str(root), "size": stat.st_size,
                                 "modified_ms": int(stat.st_mtime * 1000), "path": resolved}
         return entries
+
+    def inventory(self, roots):
+        entries = self.catalog(roots)
+        experiments, contexts, hidden = load_experiments([e["path"] for e in entries.values()], roots)
+        entries = {key: {**entry, "trial": contexts.get(entry["path"])}
+                   for key, entry in entries.items() if entry["path"] not in hidden}
+        return entries, experiments
 
 
 class TraceHandler(BaseHTTPRequestHandler):
@@ -124,28 +131,31 @@ class TraceHandler(BaseHTTPRequestHandler):
                 self.send(200, Path(__file__).with_name(name).read_bytes(), mime)
             elif url.path == "/api/files":
                 roots = self.requested_roots(url.query)
-                entries = self.server.catalog(roots)
+                entries, experiments = self.server.inventory(roots)
                 files = []
                 for item in entries.values():
                     entry = {k: v for k, v in item.items() if k != "path"}
                     try:
-                        entry.update(trace_metadata(read_trace(item["path"]), item["path"]))
+                        trace = read_trace(item["path"], trial=item["trial"])
+                        entry.update(trace_metadata(trace, item["path"], trial=item["trial"]))
                     except UnsupportedTraceFormat:
                         continue  # results/tool-call logs are not session traces.
                     except (ValueError, OSError, TypeError, AttributeError, KeyError) as error:
-                        entry.update(trace_metadata({}, item["path"]), error=str(error))
+                        entry.update(trace_metadata({}, item["path"], trial=item["trial"]), error=str(error))
                     files.append(entry)
                 self.send(200, {"files": sorted(files, key=lambda x: x["modified_ms"], reverse=True),
-                                "roots": [str(p) for p in roots]})
+                                "roots": [str(p) for p in roots], "experiments": experiments})
             elif url.path == "/api/trace":
                 key = parse_qs(url.query).get("id", [""])[0]
-                entry = self.server.catalog(self.requested_roots(url.query)).get(key)
+                entries, _ = self.server.inventory(self.requested_roots(url.query))
+                entry = entries.get(key)
                 if entry is None:
                     self.send(404, {"error": "文件不存在，或不在配置的目录中"})
                     return
-                trace = read_trace(entry["path"])
+                trace = read_trace(entry["path"], trial=entry["trial"])
                 trace["summary"] = summarize(trace)
-                trace["metadata"] = trace_metadata(trace, entry["path"])
+                trace["metadata"] = trace_metadata(trace, entry["path"], trial=entry["trial"])
+                trace["trial"] = entry["trial"]
                 self.send(200, trace)
             else:
                 self.send(404, {"error": "Not found"})

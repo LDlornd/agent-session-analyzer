@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 const initialQuery = new URLSearchParams(location.search);
 let files = [], selected = null, loadVersion = 0, scanVersion = 0;
 let activeRoots = initialQuery.has('root') ? initialQuery.getAll('root') : null;
+let experiments = [];
 const groupState = new Map();
 const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:6});
 const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -17,7 +18,8 @@ function updateFilters() {
   for(const [id,values,label] of [
     ['filter-harness',files.map(f=>f.harness),'全部 Harness'],
     ['filter-model',files.flatMap(f=>f.models),'全部模型'],
-    ['filter-experiment',files.map(f=>f.experiment),'全部实验']
+    ['filter-experiment',files.map(f=>f.experiment),'全部实验'],
+    ['filter-condition',files.map(f=>f.condition).filter(Boolean),'全部 condition']
   ]) {
     const select=$(id), previous=select.value;
     select.replaceChildren(new Option(label,''));
@@ -30,6 +32,7 @@ function fileButton(f) {
   b.setAttribute('aria-pressed',String(selected===f.id));
   b.title=`${f.title}\n${f.root} / ${f.name}`;
   b.append(el('span','file-title',f.title),el('small','file-path',f.name));
+  if(f.condition)b.append(el('small','',`${f.condition} · repeat ${f.repeat??'未知'}`));
   b.append(el('small','',new Date(f.modified_ms).toLocaleString('zh-CN')+' · '+(f.size/1024).toFixed(1)+' KB'));
   if(f.error)b.append(el('small','file-error',f.error));
   b.addEventListener('click',()=>load(f.id));return b;
@@ -57,8 +60,10 @@ function fileGroups(parent, items, depth=0, path=[]) {
 function fileList() {
   $('files').replaceChildren(); const q=$('search').value.trim().toLowerCase();
   const harness=$('filter-harness').value, model=$('filter-model').value, experiment=$('filter-experiment').value;
+  const condition=$('filter-condition').value;
   const visible=files.filter(f=>(!harness||f.harness===harness)&&(!model||f.models.includes(model))&&
-    (!experiment||f.experiment===experiment)&&[f.title,f.task_id,f.name,f.root,f.harness,...f.models,f.experiment].join(' ').toLowerCase().includes(q));
+    (!experiment||f.experiment===experiment)&&(!condition||f.condition===condition)&&
+    [f.title,f.task_id,f.name,f.root,f.harness,...f.models,f.experiment,f.condition].join(' ').toLowerCase().includes(q));
   $('file-count').textContent=`${visible.length} / ${files.length} 个 trace · Harness → 模型 → 实验`;
   fileGroups($('files'),visible);
   if(!$('files').childElementCount)$('files').append(el('p','muted',files.length?'没有匹配的文件':'目录中还没有 JSONL 文件'));
@@ -95,6 +100,7 @@ function rootsQuery(roots) {
 function clearTrace() {
   selected=null;$('metrics').replaceChildren();$('timeline').replaceChildren();
   $('coverage').textContent='';$('source-section').hidden=true;$('source').textContent='';
+  $('trial-summary').hidden=true;
 }
 async function refresh(roots=activeRoots) {
   const request=++scanVersion;++loadVersion;
@@ -102,15 +108,17 @@ async function refresh(roots=activeRoots) {
   try {
     const data=await api('/api/files?'+rootsQuery(roots));
     if(request!==scanVersion)return;
-    ++loadVersion;activeRoots=data.roots;files=data.files;
+    ++loadVersion;activeRoots=data.roots;files=data.files;experiments=data.experiments||[];
     // Preserve the user's explicit scan roots across refreshes and restarts.
     // An empty root also preserves "remove all" when the CLI has default roots.
     const address=new URL(location.href);
     address.searchParams.delete('root');
     for(const root of activeRoots.length?activeRoots:[''])address.searchParams.append('root',root);
     history.replaceState(null,'',address);
+    updateExperiments();
     showRoots();scanBusy(true);updateFilters();fileList();
     if(selected&&files.some(f=>f.id===selected))await load(selected);
+    else if(experiments.length)await openComparisonTrace();
     else if(files.length)await load(files[0].id);
     else {
       clearTrace();fileList();
@@ -124,7 +132,97 @@ async function refresh(roots=activeRoots) {
 async function load(id) {
   selected=id;fileList();const request=++loadVersion;notice('正在读取…');
   try {const trace=await api('/api/trace?id='+encodeURIComponent(id)+'&'+rootsQuery(activeRoots));if(request!==loadVersion)return;render(trace);}
-  catch(e){if(request!==loadVersion)return;notice(e.message,true);$('title').textContent='无法读取此日志';$('subtitle').textContent=files.find(f=>f.id===id)?.name||'';$('metrics').replaceChildren();$('coverage').textContent='';$('timeline').replaceChildren();$('source-section').hidden=true;}
+  catch(e){if(request!==loadVersion)return;notice(e.message,true);$('title').textContent='无法读取此日志';$('subtitle').textContent=files.find(f=>f.id===id)?.name||'';$('metrics').replaceChildren();$('coverage').textContent='';$('timeline').replaceChildren();$('source-section').hidden=true;$('trial-summary').hidden=true;}
+}
+
+function updateExperiments() {
+  const select=$('compare-experiment'), previous=select.value;
+  select.replaceChildren();
+  for(const experiment of experiments)select.add(new Option(`${experiment.name} · ${experiment.directory}`,experiment.id));
+  const preferred=experiments.some(e=>e.id===previous)?previous:files.find(f=>experiments.some(e=>e.id===f.experiment_id))?.experiment_id;
+  if(preferred)select.value=preferred;
+  $('experiment-section').hidden=!experiments.length;
+  updateComparisonTasks();
+}
+function updateComparisonTasks() {
+  const experiment=experiments.find(e=>e.id===$('compare-experiment').value);
+  const select=$('compare-task'), previous=select.value;
+  select.replaceChildren(new Option('全部任务',''));
+  for(const task of [...new Set((experiment?.trials||[]).map(t=>t.task_id))].sort())select.add(new Option(task,task));
+  if([...select.options].some(o=>o.value===previous))select.value=previous;
+  renderComparison();
+}
+function openComparisonTrace() {
+  const experiment=experiments.find(e=>e.id===$('compare-experiment').value);
+  if(!experiment)return;
+  const task=$('compare-task').value;
+  const candidates=files.filter(f=>f.experiment_id===experiment.id&&(!task||f.task_id===task));
+  if(candidates.some(f=>f.id===selected))return;
+  if(candidates.length)return load(candidates[0].id);
+  // Do not leave another experiment's metrics below a result with no trace.
+  ++loadVersion;clearTrace();fileList();notice('');
+  $('title').textContent='所选实验没有可读取的 trace';
+  $('subtitle').textContent=experiment.directory;
+  $('timeline').append(el('div','empty','当前实验或任务没有关联的 trace，请查看上方 trial 状态和错误。'));
+}
+function comparisonTable(container, headings) {
+  container.replaceChildren();const table=el('table','comparison-table'), head=el('thead',''), row=el('tr','');
+  for(const heading of headings){const cell=el('th','',heading);cell.scope='col';row.append(cell);}
+  head.append(row);const body=el('tbody','');table.append(head,body);container.append(table);return body;
+}
+function average(rows, value) {
+  const known=rows.map(value).filter(v=>typeof v==='number'&&Number.isFinite(v));
+  return `${known.length?fmt(known.reduce((a,b)=>a+b,0)/known.length):'未知'} (${known.length}/${rows.length})`;
+}
+function renderComparison() {
+  const experiment=experiments.find(e=>e.id===$('compare-experiment').value);
+  if(!experiment)return;
+  const task=$('compare-task').value, trials=experiment.trials.filter(t=>!task||t.task_id===task);
+  $('experiment-status').textContent=`${experiment.status} · 已记录 ${experiment.trials.length} / ${experiment.planned_trials??'未知'} 个 trial · ${experiment.directory}`;
+  $('experiment-warnings').replaceChildren();
+  if(experiment.warnings.length)$('experiment-warnings').append(el('div','notice error',experiment.warnings.join('\n')));
+  const summary=comparisonTable($('condition-summary'),['Condition','已记录 / 有评分','平均 reward','平均输入 token','平均输出 token','平均费用 USD','平均工具调用','平均耗时 s']);
+  for(const condition of experiment.conditions) {
+    const rows=trials.filter(t=>t.condition===condition), tr=el('tr','');
+    const values=[condition,`${rows.length} / ${rows.filter(t=>t.reward!=null).length}`,average(rows,t=>t.reward),
+      average(rows,t=>t.usage.input_tokens),average(rows,t=>t.usage.output_tokens),average(rows,t=>t.usage.cost_usd),
+      average(rows,t=>t.tool_calls),average(rows,t=>t.duration_sec)];
+    for(const value of values)tr.append(el('td','',value));summary.append(tr);
+  }
+  const matrix=comparisonTable($('trial-comparison'),['任务 / repeat',...experiment.conditions]);
+  const pairs=new Map();
+  for(const trial of trials) {
+    const key=JSON.stringify([trial.task_id,trial.repeat]);
+    if(!pairs.has(key))pairs.set(key,[]);pairs.get(key).push(trial);
+  }
+  for(const [key,rows] of [...pairs].sort(([a],[b])=>a.localeCompare(b))) {
+    const [taskId,repeat]=JSON.parse(key), tr=el('tr','');tr.append(el('th','',`${taskId} / ${repeat}`));
+    for(const condition of experiment.conditions) {
+      const td=el('td',''), matching=rows.filter(t=>t.condition===condition);
+      if(!matching.length)td.append(el('span','muted','尚无结果'));
+      for(const trial of matching) {
+        const file=files.find(f=>f.id===trial.trace_id);
+        const cell=el('div','trial-cell');
+        cell.append(badge(trial.status||'未知',trial.status==='completed'?'good':'bad'),el('strong','',`reward ${fmt(trial.reward)}`));
+        cell.append(el('small','',`Harness：${file?.harness||'未知'}`));
+        cell.append(el('small','',`模型：${trial.model||'未知'}`));
+        cell.append(el('small','',`输入 / 输出 token：${fmt(trial.usage.input_tokens)} / ${fmt(trial.usage.output_tokens)}`));
+        cell.append(el('small','',`费用 USD：${fmt(trial.usage.cost_usd)} · 工具：${fmt(trial.tool_calls)}`));
+        cell.append(el('small','',`耗时：${fmt(trial.duration_sec)} s · 结束：${trial.finish_reason||'未知'}`));
+        if(file) {
+          const open=el('button','open-trace','查看 trace');open.type='button';
+          open.addEventListener('click',async()=>{await load(file.id);$('title').scrollIntoView({block:'start'});});cell.append(open);
+          if(file.error)cell.append(el('small','comparison-error',file.error));
+        } else cell.append(el('small','comparison-error',trial.trace_error||'扫描范围内没有可读取的 trace'));
+        if(trial.errors?.length)cell.append(extra('trial 错误',trial.errors));
+        if(matching.length>1)cell.append(el('small','comparison-error',`重复配对：${trial.trial_id}`));
+        td.append(cell);
+      }
+      tr.append(td);
+    }
+    matrix.append(tr);
+  }
+  if(!pairs.size)$('trial-comparison').append(el('p','muted','尚无已记录的 trial。刷新可读取后续结果。'));
 }
 function attemptCard(e) {
   const d=e.data||{}, card=el('details','attempt');card.open=true;
@@ -160,7 +258,20 @@ function toolCard(call,result) {
 function render(trace) {
   const metadata=trace.metadata;
   $('title').textContent=metadata.title;
-  $('subtitle').textContent=`${metadata.harness} · ${metadata.models.join(' / ')} · ${metadata.experiment}\n${trace.format} · ${trace.file} · Session: ${trace.session_id||'未知'}`;
+  $('subtitle').textContent=`${metadata.harness} · ${metadata.models.join(' / ')} · ${metadata.experiment}${metadata.condition?' · '+metadata.condition+' / repeat '+metadata.repeat:''}\n${trace.format} · ${trace.file} · Session: ${trace.session_id||'未知'}`;
+  const trial=trace.trial;
+  if(trial&&experiments.some(e=>e.id===trial.experiment_id)) {
+    const experimentSelect=$('compare-experiment');
+    if(experimentSelect.value!==trial.experiment_id) {
+      experimentSelect.value=trial.experiment_id;updateComparisonTasks();
+    }
+    const taskSelect=$('compare-task');
+    if(taskSelect.value&&taskSelect.value!==trial.task_id) {
+      taskSelect.value=trial.task_id;renderComparison();
+    }
+  }
+  $('trial-summary').hidden=!trial;
+  if(trial)$('trial-summary').textContent=`Trial 汇总：${trial.status} · reward ${fmt(trial.reward)} · 输入 / 输出 token ${fmt(trial.usage.input_tokens)} / ${fmt(trial.usage.output_tokens)} · 费用 USD ${fmt(trial.usage.cost_usd)} · 工具 ${fmt(trial.tool_calls)} · 全流程耗时 ${fmt(trial.duration_sec)} s。此处来自实验结果，不分摊到模型尝试。`;
   const failures=trace.events.filter(e=>e.event==='run.failed').map(e=>`运行异常：${e.data?.error_type||''} ${e.data?.message||''}`);
   const captureWarnings=trace.events.filter(e=>e.event==='capture.warning').map(e=>e.data?.message).filter(Boolean);
   notice([...trace.warnings,...failures,...new Set(captureWarnings)].join('\n'),failures.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;
@@ -193,6 +304,8 @@ function render(trace) {
 }
 $('refresh').addEventListener('click',()=>refresh());
 $('choose-root').addEventListener('click',chooseRoot);
-for(const id of ['filter-harness','filter-model','filter-experiment'])$(id).addEventListener('change',fileList);
+for(const id of ['filter-harness','filter-model','filter-experiment','filter-condition'])$(id).addEventListener('change',fileList);
+$('compare-experiment').addEventListener('change',()=>{updateComparisonTasks();openComparisonTrace();});
+$('compare-task').addEventListener('change',()=>{renderComparison();openComparisonTrace();});
 $('search').addEventListener('input',fileList);
 refresh();

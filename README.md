@@ -4,7 +4,7 @@
 
 层级：**session → turn → step → model attempt / tool call**。
 
-支持 dsh 同步 Python SDK；当前源码还新增了 OpenHands 本地同步 SDK 适配（静态参照 1.49.1，未执行验证）。记录模型信息、token 消耗、接口返回的思考内容、工具参数和结果；保留原始事件。查看器支持本包日志、原生未压缩的 dsh `session.v3.jsonl`、OpenHands 事件 JSONL。
+支持 dsh 同步 Python SDK；当前源码还新增了 OpenHands 本地同步 SDK 适配（静态参照 1.49.1，未执行验证）。记录模型信息、token 消耗、接口返回的思考内容、工具参数和结果；保留原始事件。查看器支持本包日志、原生未压缩的 dsh `session.v3.jsonl`、OpenHands 事件 JSONL，以及 Evaluation 的 condition 对比。
 
 ## 安装
 
@@ -98,6 +98,35 @@ with DshRecorder("./logs/harness", metadata={
 扫描时会读取每个文件提取分类信息。单文件上限 100 MiB；暂不读取 `.zstd` 或旧版 dsh 日志。
 
 ## 数据协议与统计口径
+
+### 实验结果与 condition 对比
+
+选择包含 `manifest.json` 和 `results.jsonl` 的实验目录，或它们共同的上级日志目录。
+页面会显示实验选择、任务筛选、condition 指标汇总和按 `task_id + repeat` 配对的横向对比表，
+可直接打开每个 trial 的 trace。各指标均显示已知样本数 / 已记录样本数，缺失不当作零；
+耗时是整个 trial 的准备、执行、评分及清理耗时。不同实验目录独立配对。
+
+打开某个实验的 trace 时，上方对比区自动切换到对应实验。切换对比区的实验或任务时，
+下方保留符合选择的 trace，或打开该范围内最新的 trace；没有可读 trace 时清空旧详情并说明原因，
+避免把不同实验的数据混在一起。独立 trace 不会被补造实验结果。
+
+目前支持 `schema_version=1` 的 Evaluation 结果。每行包含 `trial_id`、`task_id`、
+`condition`、整数 `repeat`，可提供 `reward`、`status`、`duration_sec`、`model` 和 `agent`。
+`manifest.config.conditions` 提供条件列表。condition 名称没有固定限制。
+`trace_path` 相对 `trials/<trial_id>/`，也接受位于扫描目录内的绝对路径；
+旧结果默认关联 `trials/<trial_id>/agent/events.jsonl`。显式指定标准 trace 后，
+该 trial 的原生 `agent/events.jsonl` 不重复列出。结果和工具调用辅助 JSONL 不作为会话显示。
+
+汇总优先读取 `agent.usage` 中的 `input_tokens`、`output_tokens`、`total_tokens`、
+`cache_read_tokens`、`cache_write_tokens`、`reasoning_tokens`、`cost_usd`，
+工具数读取 `agent.tool_calls`；旧 OpenHands `agent.usage.tokens` 会在读取层归一化。
+现有原生 OpenHands 事件可直接查看，但不包含逐次 completion usage 时，
+时间线保留未知，只在独立的 trial 汇总栏显示结果中的累计用量，不向各步分摊。
+
+已有标准 trace 和原生 dsh 文件不要求实验目录，仍可独立查看。扫描范围只选到一个
+`agent/trace` 子目录时，可以查看 trace，但完整实验对比需要选中包含结果文件的实验目录。
+这些读取路径没有导入 OpenHands / BenchFlow SDK。新 harness 输出相同 trace 和结果约定，
+即可复用页面；格式适配仍放在 `adapters/`，采集与回调放在 `recorders/`。
 
 每行一个事件，`schema` 为 `harness-trace/1`：
 
