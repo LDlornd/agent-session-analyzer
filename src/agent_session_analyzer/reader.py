@@ -1,13 +1,19 @@
-"""Offline readers for harness-trace/1 and uncompressed dsh session v3."""
+"""Offline readers; all supported sources become harness-trace/1 events."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 from .schema import SCHEMA
 from .adapters.dsh import TOKEN_FIELDS, DshAdapter
+from .adapters.openhands import OpenHandsAdapter, text_content
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
+
+
+class UnsupportedTraceFormat(ValueError):
+    """Valid JSONL that is not a supported session trace."""
 
 
 def parse_jsonl(text: str) -> tuple[list[dict], list[str]]:
@@ -27,6 +33,40 @@ def parse_jsonl(text: str) -> tuple[list[dict], list[str]]:
             raise ValueError(f"第 {index + 1} 行必须是 JSON 对象")
         rows.append(row)
     return rows, warnings
+
+
+def _openhands_events(rows: list[dict], path: Path) -> tuple[str, list[dict]]:
+    # Native callbacks omit the conversation ID. This ID identifies the source
+    # file only; it must not be presented as an original SDK session ID.
+    sid = "import-" + hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+    adapter = OpenHandsAdapter(sid)
+    events = [adapter.row("session.recording", {
+        "capture": "native OpenHands event import", "session_id_source": "file_path",
+    })]
+    events[0]["time_ms"] = None
+
+    def end_turn(status):
+        for event in adapter.end_turn(status):
+            event["time_ms"] = None
+            if event["event"] in ("turn/end", "step/end"):
+                event["data"]["boundary_source"] = "native_event_import"
+            events.append(event)
+
+    for raw in rows:
+        if raw.get("id") and raw["id"] in adapter.seen_events:
+            continue
+        user_message = raw.get("kind") == "MessageEvent" and raw.get("source") == "user"
+        if user_message and adapter.active:
+            end_turn("unknown")
+        if user_message or (not adapter.active and raw.get("kind") == "ActionEvent"):
+            message = raw.get("llm_message") or {}
+            start = adapter.begin_turn(text_content(message.get("content")))
+            start[0]["time_ms"] = None
+            start[0]["data"]["boundary_source"] = "native_event_import"
+            events.extend(start)
+        events.extend(adapter.event(raw))
+    end_turn("unknown")
+    return sid, events
 
 
 def read_trace(path: str | Path) -> dict:
@@ -70,8 +110,13 @@ def read_trace(path: str | Path) -> dict:
         if first.get("isSeeded") or any(e.get("type") == "session/end-seed" for e in rows[1:]):
             warnings.append("此原生日志含继承或恢复边界；当前统计覆盖整个文件，未排除历史事件。")
         fmt = "dsh/session-v3"
+    elif (isinstance(first.get("kind"), str) and first["kind"].endswith("Event")
+          and "id" in first and "timestamp" in first):
+        sid, events = _openhands_events(rows, path)
+        fmt = "openhands/events"
+        warnings.append("原生事件导入：session ID 来自文件路径，turn 为推导边界；逐次 token、隐藏重试和精确 step 耗时不可恢复。")
     else:
-        raise ValueError("不支持的格式：需要 harness-trace/1 或原生 dsh session.v3.jsonl")
+        raise UnsupportedTraceFormat("不支持的格式：需要 harness-trace/1、原生 dsh v3 或 OpenHands 事件 JSONL")
     return {"session_id": sid, "events": events, "warnings": warnings, "header": first,
             "format": fmt, "file": path.name}
 
@@ -145,10 +190,18 @@ def trace_metadata(trace: dict, path: str | Path) -> dict:
             title = title[:120] + "…"
     if not harnesses and trace.get("format") == "dsh/session-v3":
         harnesses.add("dsh")
+    # Providers may return a bare name while the configured name is qualified,
+    # e.g. deepseek-flash vs deepseek/deepseek-flash. Resolve only an exact,
+    # unique suffix match; ambiguous or genuinely different names stay separate.
+    labels = set()
+    for name in models or configured_models:
+        matches = {value for value in configured_models
+                   if "/" in value and value.rsplit("/", 1)[-1] == name}
+        labels.add(next(iter(matches)) if len(matches) == 1 else name)
     return {"title": title or "未命名任务", "task_id": _label(metadata.get("task_id")),
             "harness": " / ".join(sorted(harnesses)) or "未知 Harness",
-            "models": sorted(models or configured_models) or ["未知模型"],
-            "experiment": experiment or "未标注实验"}
+            "models": sorted(labels) or ["未知模型"],
+            "experiment": experiment or "独立运行"}
 
 
 def summarize(trace: dict) -> dict:

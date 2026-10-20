@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .reader import read_trace, summarize, trace_metadata
+from .reader import UnsupportedTraceFormat, read_trace, summarize, trace_metadata
 
 
 def choose_directory() -> str:
@@ -130,7 +130,9 @@ class TraceHandler(BaseHTTPRequestHandler):
                     entry = {k: v for k, v in item.items() if k != "path"}
                     try:
                         entry.update(trace_metadata(read_trace(item["path"]), item["path"]))
-                    except (ValueError, OSError) as error:
+                    except UnsupportedTraceFormat:
+                        continue  # results/tool-call logs are not session traces.
+                    except (ValueError, OSError, TypeError, AttributeError, KeyError) as error:
                         entry.update(trace_metadata({}, item["path"]), error=str(error))
                     files.append(entry)
                 self.send(200, {"files": sorted(files, key=lambda x: x["modified_ms"], reverse=True),
@@ -147,7 +149,7 @@ class TraceHandler(BaseHTTPRequestHandler):
                 self.send(200, trace)
             else:
                 self.send(404, {"error": "Not found"})
-        except (ValueError, OSError) as error:
+        except (ValueError, OSError, TypeError, AttributeError, KeyError) as error:
             self.send(400, {"error": str(error)})
 
 

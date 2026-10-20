@@ -1,8 +1,10 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let files = [], selected = null, loadVersion = 0, scanVersion = 0, activeRoots = null;
+const initialQuery = new URLSearchParams(location.search);
+let files = [], selected = null, loadVersion = 0, scanVersion = 0;
+let activeRoots = initialQuery.has('root') ? initialQuery.getAll('root') : null;
 const groupState = new Map();
-const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN');
+const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:6});
 const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 function el(tag, cls, text) { const n=document.createElement(tag); if(cls)n.className=cls; if(text!=null)n.textContent=text; return n; }
 function badge(text, kind='') { return el('span','badge '+kind,text); }
@@ -101,6 +103,12 @@ async function refresh(roots=activeRoots) {
     const data=await api('/api/files?'+rootsQuery(roots));
     if(request!==scanVersion)return;
     ++loadVersion;activeRoots=data.roots;files=data.files;
+    // Preserve the user's explicit scan roots across refreshes and restarts.
+    // An empty root also preserves "remove all" when the CLI has default roots.
+    const address=new URL(location.href);
+    address.searchParams.delete('root');
+    for(const root of activeRoots.length?activeRoots:[''])address.searchParams.append('root',root);
+    history.replaceState(null,'',address);
     showRoots();scanBusy(true);updateFilters();fileList();
     if(selected&&files.some(f=>f.id===selected))await load(selected);
     else if(files.length)await load(files[0].id);
@@ -121,10 +129,11 @@ async function load(id) {
 function attemptCard(e) {
   const d=e.data||{}, card=el('details','attempt');card.open=true;
   const summary=el('summary','',`Model attempt ${d.attempt_index} · ${e.model?.model||'模型未提供'} `);
-  const labels={committed:'已提交',completed:'已返回',failed:'请求失败',event_only:'仅有事件 / usage 缺失',uncommitted:'未提交 / 失败尝试',interrupted:'已中断'};
+  const labels={committed:'已提交',completed:'已返回',failed:'请求失败',event_only:'由事件推导 / completion 未记录',uncommitted:'未提交 / 失败尝试',interrupted:'已中断'};
   summary.append(badge(labels[d.status]||d.status||'未知',['committed','completed'].includes(d.status)?'good':'bad'));
   card.append(summary);const body=el('div','card-body');
-  body.append(el('p','muted',`Provider: ${e.model?.provider||'未提供'} · 结束原因: ${pretty(d.finish_reason)||'未提供'}`));
+  body.append(el('p','muted',`Provider: ${e.model?.provider||'未提供'} · 结束原因: ${d.finish_reason==null?'未提供':pretty(d.finish_reason)}`));
+  if(d.status==='event_only')body.append(el('p','muted','此条记录由模型响应关联的事件推导；日志未保存该次 completion 的 usage 和结束原因，不能从工具结果或 trial 累计用量还原。'));
   const tokens=el('div','token-row');
   for(const [key,label] of Object.entries({total_tokens:'总 token',input_tokens:'输入（原始）',output_tokens:'输出',cache_read_tokens:'缓存读取',reasoning_tokens:'思考'}))tokens.append(el('span','token',`${label} ${fmt(d.usage?.[key])}`));
   body.append(tokens);
@@ -170,7 +179,8 @@ function render(trace) {
     const steps=new Map();for(const e of events){if(e.step_id==null)continue;if(!steps.has(e.step_id))steps.set(e.step_id,[]);steps.get(e.step_id).push(e);}
     const stepsNode=el('div','steps');
     for(const [stepId,rows] of steps){const step=el('section','step');const start=rows.find(e=>e.event==='step/start'),end=rows.findLast(e=>e.event==='step/end');const h=el('div','step-heading',`Step ${stepId}`);h.append(el('span','muted',duration(start?.time_ms,end?.time_ms)));if(!end)h.append(badge('未结束'));step.append(h);
-      const used=new Set();for(const row of rows){if(row.event==='model.attempt')step.append(attemptCard(row));if(row.event==='tool.call'){const index=rows.findIndex((r,i)=>!used.has(i)&&r.event==='tool.result'&&r.tool_call_id!=null&&r.tool_call_id===row.tool_call_id);if(index>=0)used.add(index);step.append(toolCard(row,index>=0?rows[index]:null));}}
+      for(const row of rows.filter(r=>r.event==='model.attempt'))step.append(attemptCard(row));
+      const used=new Set();for(const row of rows){if(row.event==='tool.call'){const index=rows.findIndex((r,i)=>!used.has(i)&&r.event==='tool.result'&&r.tool_call_id!=null&&r.tool_call_id===row.tool_call_id);if(index>=0)used.add(index);step.append(toolCard(row,index>=0?rows[index]:null));}}
       rows.forEach((r,i)=>{if(r.event==='tool.result'&&!used.has(i))step.append(toolCard(null,r));});
       step.append(extra('步骤事件',rows));stepsNode.append(step);
     }

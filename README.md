@@ -4,7 +4,7 @@
 
 层级：**session → turn → step → model attempt / tool call**。
 
-支持 dsh 同步 Python SDK；当前源码还新增了 OpenHands 本地同步 SDK 适配（静态参照 1.49.1，未执行验证）。记录模型信息、token 消耗、接口返回的思考内容、工具参数和结果；保留原始事件。查看器支持本包日志及原生未压缩的 dsh `session.v3.jsonl`。
+支持 dsh 同步 Python SDK；当前源码还新增了 OpenHands 本地同步 SDK 适配（静态参照 1.49.1，未执行验证）。记录模型信息、token 消耗、接口返回的思考内容、工具参数和结果；保留原始事件。查看器支持本包日志、原生未压缩的 dsh `session.v3.jsonl`、OpenHands 事件 JSONL。
 
 ## 安装
 
@@ -63,6 +63,10 @@ agent-session-analyzer
 
 目录窗口由运行查看器的 Python 在本机桌面打开，需要 Python 自带的 `tkinter` 和图形桌面；Windows 官方 Python 安装通常包含它。窗口不会上传文件，路径和文件仍由本地服务读取。无图形桌面时可继续使用下面的 `--root` 参数。
 
+扫描成功后，已选目录会同步到当前页面地址的 `root` 参数。刷新页面或重新打开该链接
+会恢复相同扫描范围；移除全部目录也会保留空选择。新打开的不含 `root` 参数的地址，
+仍使用命令行的初始目录，没有传 `--root` 时从空列表开始。
+
 也可以通过命令行指定初始目录及端口（页面中仍可添加或移除）：
 
 ```bash
@@ -75,9 +79,9 @@ agent-session-analyzer --root ./logs/harness --root ./config/dsh/sessions --port
 
 分类信息从日志读取，不需要重录旧 trace：
 
-- Harness 来自事件的 `harness`（原生 dsh v3 自动识别）；模型优先使用实际模型尝试中的名称，没有尝试时使用记录的配置。
+- Harness 来自事件的 `harness`（原生 dsh v3 自动识别）；模型优先使用实际模型尝试中的名称，没有尝试时使用记录的配置。如果响应只返回短名称，且日志中存在唯一一个尾部完全匹配的带 provider 配置名称，则用配置名称分组，例如 `deepseek-flash` 归入 `deepseek/deepseek-flash`。有多个匹配项或名称不一致时不合并；时间线及 raw 中的响应模型名保持原值。
 - 任务名称依次读取 `session.recording.data.metadata` 中的 `task_name`、`task`、`task_id`；都没有时使用首次任务输入的第一行，最多 120 字。没有可用任务文本时显示“未命名任务”。
-- 实验依次读取同一 `metadata` 中的 `experiment_name`、`experiment`、`experiment_id`；没有时识别路径中的 `<实验目录>/trials/...`，其余显示“未标注实验”。`task` 和 `experiment` 也可以是含 `name`、`title` 或 `id` 的对象。
+- 实验依次读取同一 `metadata` 中的 `experiment_name`、`experiment`、`experiment_id`；没有时识别路径中的 `<实验目录>/trials/...`，其余显示“独立运行”。`task` 和 `experiment` 也可以是含 `name`、`title` 或 `id` 的对象。
 - 搜索覆盖任务名称、任务 ID、Harness、模型、实验和文件路径。无法读取的文件保留在列表中并显示错误，不影响其他 trace。
 
 后续录制时，可用已有的 `metadata` 参数明确标注任务和实验（两个 recorder 都支持）：

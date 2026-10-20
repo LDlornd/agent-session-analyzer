@@ -85,6 +85,15 @@ def response_fields(response):
             "finish_reason": response.get("status"), "tool_ids": tools}
 
 
+def merge_message_fields(previous, message):
+    # A response can emit several ActionEvents; only the first may carry text
+    # or reasoning. Later empty fields must not erase the observed content.
+    fields = message_fields(message)
+    fields["reasoning_fields"] = {**previous.get("reasoning_fields", {}),
+        **{key: value for key, value in fields["reasoning_fields"].items() if value}}
+    return {**previous, **{key: value for key, value in fields.items() if value}}
+
+
 class OpenHandsAdapter:
     """Feed native events, completion JSON and retry callbacks into one schema.
 
@@ -223,7 +232,9 @@ class OpenHandsAdapter:
         elif kind == "ActionEvent":
             if group is None:
                 group = self._group(rows, self.model)
-            group["message"] = {**message_fields(raw), "thought": raw.get("thought")}
+            group["message"] = merge_message_fields(group["message"], raw)
+            if raw.get("thought"):
+                group["message"]["thought"] = raw["thought"]
             cid = raw.get("tool_call_id")
             aid = group.get("attempt_id")
             if cid:
@@ -254,7 +265,7 @@ class OpenHandsAdapter:
                 group["pending"].discard(cid)
         else:
             if kind == "MessageEvent" and group:
-                group["message"] = message_fields(raw.get("llm_message") or {})
+                group["message"] = merge_message_fields(group["message"], raw.get("llm_message") or {})
             rows.append(self.row("openhands.event", {"kind": kind}, group=group, raw=raw, when=when))
         return rows
 
