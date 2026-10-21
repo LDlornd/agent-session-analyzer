@@ -4,6 +4,7 @@ const initialQuery = new URLSearchParams(location.search);
 let files = [], selected = null, loadVersion = 0, scanVersion = 0;
 let activeRoots = initialQuery.has('root') ? initialQuery.getAll('root') : null;
 let experiments = [];
+let navigationMode = null;
 const groupState = new Map();
 const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:6});
 const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -14,12 +15,16 @@ function extra(title, value) { const d=el('details','extra');d.append(el('summar
 function block(parent,title,value,cls='answer') { parent.append(el('div','block-title',title),el('div',cls,value == null ? '未提供' : value)); }
 function duration(start,end) { return start != null && end != null && end>=start ? ((end-start)/1000).toFixed(2)+' s' : '耗时未知'; }
 async function api(url, options) { const r=await fetch(url, options); const data=await r.json(); if(!r.ok)throw new Error(data.error||r.statusText); return data; }
+function experimentFor(file) { return experiments.find(experiment=>experiment.id===file.experiment_id); }
+function navigationFiles() {
+  return files.filter(file=>Boolean(experimentFor(file))===(navigationMode==='experiments'));
+}
 function updateFilters() {
+  const items=navigationFiles();
   for(const [id,values,label] of [
-    ['filter-harness',files.map(f=>f.harness),'全部 Harness'],
-    ['filter-model',files.flatMap(f=>f.models),'全部模型'],
-    ['filter-experiment',files.map(f=>f.experiment),'全部实验'],
-    ['filter-condition',files.map(f=>f.condition).filter(Boolean),'全部 condition']
+    ['filter-harness',items.map(f=>f.harness),'全部 Harness'],
+    ['filter-model',items.flatMap(f=>f.models),'全部模型'],
+    ['filter-condition',items.map(f=>f.condition).filter(Boolean),'全部 condition']
   ]) {
     const select=$(id), previous=select.value;
     select.replaceChildren(new Option(label,''));
@@ -27,46 +32,156 @@ function updateFilters() {
     if(values.includes(previous))select.value=previous;
   }
 }
-function fileButton(f) {
+function fileButton(f, {showRepeat=false}={}) {
   const b=el('button','file'+(selected===f.id?' active':''));
+  b.type='button';
   b.setAttribute('aria-pressed',String(selected===f.id));
   b.title=`${f.title}\n${f.root} / ${f.name}`;
-  b.append(el('span','file-title',f.title),el('small','file-path',f.name));
-  if(f.condition)b.append(el('small','',`${f.condition} · repeat ${f.repeat??'未知'}`));
+  const title=showRepeat?`Repeat ${f.repeat??'未知'}${f.condition?' · '+f.condition:''}`:f.title;
+  const heading=el('span','file-heading');heading.append(el('span','file-title',title));
+  const status=f.trial?.status;
+  const labels={completed:'已完成',error:'失败',cancelled:'已取消',running:'运行中',interrupted:'已中断'};
+  if(f.error)heading.append(el('span','file-status error','读取失败'));
+  else if(status)heading.append(el('span','file-status',labels[status]||status));
+  else if(f.trial?.result_recorded===false)heading.append(el('span','file-status','结果未记录'));
+  b.append(heading);
+  if(!showRepeat&&f.task_id&&f.task_id!==f.title)b.append(el('small','file-task-id',f.task_id));
+  const owners=el('span','file-owners');
+  owners.append(el('span','harness-label',f.harness));
+  for(const model of f.models)owners.append(el('span','model-label',model));
+  b.append(owners);
+  if(!showRepeat&&f.condition)b.append(el('small','file-condition',`${f.condition} · repeat ${f.repeat??'未知'}`));
+  if(!experimentFor(f)&&f.experiment!=='独立运行')b.append(el('small','file-recording-label',`标签：${f.experiment}`));
+  b.append(el('small','file-path',f.name));
   b.append(el('small','',new Date(f.modified_ms).toLocaleString('zh-CN')+' · '+(f.size/1024).toFixed(1)+' KB'));
   if(f.error)b.append(el('small','file-error',f.error));
-  b.addEventListener('click',()=>load(f.id));return b;
+  b.addEventListener('click',()=>load(f.id,{reveal:true}));return b;
 }
-function fileGroups(parent, items, depth=0, path=[]) {
-  if(depth===3) { for(const f of items)parent.append(fileButton(f));return; }
+function matchingFiles() {
+  const query=$('search').value.trim().toLowerCase(), harness=$('filter-harness').value;
+  const model=$('filter-model').value, condition=$('filter-condition').value;
+  return navigationFiles().filter(f=>(!harness||f.harness===harness)&&(!model||f.models.includes(model))&&
+    (!condition||f.condition===condition)&&
+    [f.title,f.task_id,f.name,f.root,f.harness,...f.models,f.experiment,f.condition].join(' ').toLowerCase().includes(query));
+}
+function matchesEmptyExperiment(experiment) {
+  if($('filter-harness').value)return false;
+  const model=$('filter-model').value, condition=$('filter-condition').value;
+  if(model&&!experiment.trials.some(trial=>trial.model===model))return false;
+  if(condition&&!experiment.conditions.includes(condition))return false;
+  const query=$('search').value.trim().toLowerCase();
+  return [experiment.name,experiment.directory,...experiment.trials.map(trial=>trial.task_id)].join(' ').toLowerCase().includes(query);
+}
+function taskGroupKey(file) {
+  return JSON.stringify([file.experiment_id,file.task_id?`task:${file.task_id}`:`trace:${file.id}`]);
+}
+function taskGroups(parent, items) {
   const groups=new Map();
-  for(const f of items) {
-    const labels=depth===0?[f.harness]:depth===1?f.models:[f.experiment];
-    for(const label of labels) {
-      if(depth===1&&$('filter-model').value&&label!==$('filter-model').value)continue;
-      if(!groups.has(label))groups.set(label,[]);
-      groups.get(label).push(f);
-    }
+  for(const file of items) {
+    // A missing task ID must not merge unrelated traces with the same title.
+    const key=taskGroupKey(file);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(file);
   }
-  for(const [label,rows] of [...groups].sort(([a],[b])=>a.localeCompare(b,'zh-CN'))) {
-    const key=JSON.stringify([...path,label]), group=el('details','file-group');
-    group.open=groupState.get(key)??true;
-    const head=el('summary','');
-    head.append(el('span','',label),el('small','',rows.length));group.append(head);
-    group.addEventListener('toggle',()=>groupState.set(key,group.open));
-    fileGroups(group,rows,depth+1,[...path,label]);parent.append(group);
+  for(const [key,rows] of groups) {
+    rows.sort((a,b)=>(a.repeat==null)-(b.repeat==null)||
+      String(a.repeat??'').localeCompare(String(b.repeat??''),'zh-CN',{numeric:true})||
+      (a.condition||'').localeCompare(b.condition||'','zh-CN')||b.modified_ms-a.modified_ms);
+    const task=rows[0], group=el('details','task-group'+(rows.some(file=>file.id===selected)?' selected-task':''));
+    group.open=groupState.get(key)??false;
+    group.setAttribute('aria-label',task.title+'的重复运行');
+    const heading=el('summary','task-heading');
+    heading.append(el('span','task-name',task.title),el('span','task-count',`${rows.length} 条 trace`));
+    group.append(heading);
+    if(task.task_id&&task.task_id!==task.title)group.append(el('small','task-id',task.task_id));
+    const repeats=el('div','repeat-files');
+    for(const file of rows)repeats.append(fileButton(file,{showRepeat:true}));
+    heading.addEventListener('click',event=>{
+      event.preventDefault();group.open=!group.open;groupState.set(key,group.open);
+    });
+    group.append(repeats);parent.append(group);
   }
+}
+function experimentGroups(parent, items) {
+  const selectedFile=files.find(file=>file.id===selected);
+  const active=selectedFile?.experiment_id||$('compare-experiment').value;
+  const groups=experiments.map(experiment=>{
+    const all=files.filter(file=>file.experiment_id===experiment.id);
+    return {experiment,all,rows:items.filter(file=>file.experiment_id===experiment.id),
+      modified:all.reduce((latest,file)=>Math.max(latest,file.modified_ms),0)};
+  }).sort((a,b)=>b.modified-a.modified||a.experiment.name.localeCompare(b.experiment.name,'zh-CN'));
+  let count=0;
+  for(const {experiment,all,rows} of groups) {
+    if(!rows.length&&(all.length||!matchesEmptyExperiment(experiment)))continue;
+    count++;
+    const group=el('details','experiment-group'+(active===experiment.id?' selected-experiment':''));
+    group.open=groupState.get(experiment.id)??false;
+    const head=el('summary','experiment-heading'), title=el('span','experiment-title');
+    title.append(el('span','experiment-name',experiment.name),el('span','experiment-count',all.length?`${rows.length}/${all.length} 条`:'暂无 trace'));
+    const metadata=el('span','experiment-owners'), harnesses=[...new Set(all.map(file=>file.harness))];
+    const models=[...new Set(all.length?all.flatMap(file=>file.models):experiment.trials.map(trial=>trial.model).filter(Boolean))];
+    metadata.append(el('span','harness-label',harnesses.join(' / ')||'尚无执行轨迹'));
+    if(models.length){const label=el('span','model-label',models.length===1?models[0]:`${models[0]} +${models.length-1}`);label.title=models.join('\n');metadata.append(label);}
+    head.title=experiment.directory;head.append(title,metadata);group.append(head);
+    if(experiments.some(other=>other.id!==experiment.id&&other.name===experiment.name))group.append(el('small','experiment-location',experiment.directory));
+    const children=el('div','experiment-files');
+    taskGroups(children,rows);
+    if(!rows.length)children.append(el('p','empty-experiment','尚无可读取的 trace。右侧可查看实验状态与已记录结果。'));
+    group.append(children);
+    head.addEventListener('click',event=>{
+      event.preventDefault();group.open=!group.open;groupState.set(experiment.id,group.open);
+      if(group.open)selectExperiment(experiment,rows);
+    });
+    parent.append(group);
+  }
+  return count;
 }
 function fileList() {
-  $('files').replaceChildren(); const q=$('search').value.trim().toLowerCase();
-  const harness=$('filter-harness').value, model=$('filter-model').value, experiment=$('filter-experiment').value;
-  const condition=$('filter-condition').value;
-  const visible=files.filter(f=>(!harness||f.harness===harness)&&(!model||f.models.includes(model))&&
-    (!experiment||f.experiment===experiment)&&(!condition||f.condition===condition)&&
-    [f.title,f.task_id,f.name,f.root,f.harness,...f.models,f.experiment,f.condition].join(' ').toLowerCase().includes(q));
-  $('file-count').textContent=`${visible.length} / ${files.length} 个 trace · Harness → 模型 → 实验`;
-  fileGroups($('files'),visible);
-  if(!$('files').childElementCount)$('files').append(el('p','muted',files.length?'没有匹配的文件':'目录中还没有 JSONL 文件'));
+  $('files').replaceChildren();const visible=matchingFiles(), total=navigationFiles().length;
+  const independent=files.filter(file=>!experimentFor(file)).length;
+  $('experiment-count').textContent=experiments.length;$('standalone-count').textContent=independent;
+  for(const [id,mode] of [['nav-experiments','experiments'],['nav-standalone','standalone']])$(id).setAttribute('aria-pressed',String(navigationMode===mode));
+  $('experiment-section').hidden=navigationMode!=='experiments'||!experiments.length;
+  if(navigationMode==='experiments') {
+    const count=experimentGroups($('files'),visible);
+    $('file-count').textContent=`${count} 个实验 · ${visible.length}/${total} 条 trace · 最近运行优先`;
+  } else {
+    for(const file of visible)$('files').append(fileButton(file));
+    $('file-count').textContent=`${visible.length}/${total} 条独立 trace`;
+  }
+  if(!$('files').childElementCount)$('files').append(el('p','navigation-empty',files.length||experiments.length?'没有匹配的记录，请调整筛选或切换运行类型。':'选择日志目录后，实验和独立运行会显示在这里。'));
+}
+function showFileInNavigation(file, reveal) {
+  const experiment=experimentFor(file), mode=experiment?'experiments':'standalone';
+  if(navigationMode!==mode){navigationMode=mode;updateFilters();}
+  if(reveal) {
+    if(experiment){groupState.set(experiment.id,true);groupState.set(taskGroupKey(file),true);}
+    if(!matchingFiles().some(candidate=>candidate.id===file.id)) {
+      $('search').value='';
+      for(const id of ['filter-harness','filter-model','filter-condition'])$(id).value='';
+    }
+  }
+}
+function selectExperiment(experiment, items) {
+  $('compare-experiment').value=experiment.id;$('compare-task').value='';updateComparisonTasks();
+  if(items.some(file=>file.id===selected)){fileList();return;}
+  if(items.length)return load(items[0].id);
+  return openComparisonTrace();
+}
+function switchNavigation(mode) {
+  navigationMode=mode;updateFilters();fileList();
+  const candidates=matchingFiles();
+  if(candidates.some(file=>file.id===selected))return;
+  if(candidates.length)return load(candidates[0].id);
+  showEmptyTrace('没有匹配的运行记录','可以调整左侧搜索或筛选条件。','当前运行类型下没有可读取的 trace。');
+}
+function renderTraceContext(metadata) {
+  const container=$('trace-context'), experiment=experiments.find(item=>item.id===metadata.experiment_id);
+  container.replaceChildren();container.hidden=false;
+  const label=experiment?`实验 · ${experiment.name}`:`独立运行${metadata.experiment!=='独立运行'?' · '+metadata.experiment:''}`;
+  container.append(el('span','context-experiment',label),
+    el('span','context-owner',`Harness · ${metadata.harness}`),el('span','context-owner',`模型 · ${metadata.models.join(' / ')}`));
+  if(metadata.condition)container.append(el('span','context-condition',`${metadata.condition} · repeat ${metadata.repeat??'未知'}`));
 }
 function showRoots() {
   $('selected-roots').replaceChildren();
@@ -76,7 +191,8 @@ function showRoots() {
     remove.addEventListener('click',()=>refresh(activeRoots.filter(value=>value!==root)));
     row.append(label,remove);$('selected-roots').append(row);
   }
-  $('roots').textContent=activeRoots?.join('\n')||'尚未设置';
+  $('root-count').textContent=activeRoots?.length?`${activeRoots.length} 个目录`:'未选择';
+  $('root-count').title=activeRoots?.join('\n')||'尚未设置';
 }
 function scanBusy(busy) {
   $('choose-root').disabled=busy;$('refresh').disabled=busy;
@@ -101,14 +217,24 @@ function clearTrace() {
   selected=null;$('metrics').replaceChildren();$('timeline').replaceChildren();
   $('coverage').textContent='';$('source-section').hidden=true;$('source').textContent='';
   $('trial-summary').hidden=true;
+  $('trace-context').replaceChildren();$('trace-context').hidden=true;
+}
+function showEmptyTrace(title, subtitle, message) {
+  ++loadVersion;clearTrace();fileList();notice('');
+  $('title').textContent=title;$('subtitle').textContent=subtitle;
+  $('timeline').append(el('div','empty',message));
 }
 async function refresh(roots=activeRoots) {
+  const hadRoots=Boolean(activeRoots?.length);
   const request=++scanVersion;++loadVersion;
   scanBusy(true);notice('正在扫描…');
   try {
     const data=await api('/api/files?'+rootsQuery(roots));
     if(request!==scanVersion)return;
     ++loadVersion;activeRoots=data.roots;files=data.files;experiments=data.experiments||[];
+    if(navigationMode===null||!hadRoots)navigationMode=experiments.length?'experiments':'standalone';
+    if(!activeRoots.length)$('scan-controls').open=true;
+    else if(!hadRoots)$('scan-controls').open=false;
     // Preserve the user's explicit scan roots across refreshes and restarts.
     // An empty root also preserves "remove all" when the CLI has default roots.
     const address=new URL(location.href);
@@ -118,21 +244,22 @@ async function refresh(roots=activeRoots) {
     updateExperiments();
     showRoots();scanBusy(true);updateFilters();fileList();
     if(selected&&files.some(f=>f.id===selected))await load(selected);
-    else if(experiments.length)await openComparisonTrace();
-    else if(files.length)await load(files[0].id);
+    else if(navigationMode==='experiments'&&experiments.length)await openComparisonTrace();
+    else if(matchingFiles().length)await load(matchingFiles()[0].id);
     else {
-      clearTrace();fileList();
-      $('title').textContent=activeRoots.length?'暂无运行记录':'请选择扫描目录';
-      $('subtitle').textContent=activeRoots.length?'目录中没有 JSONL 文件，可选择其他目录。':'点击左侧“选择扫描目录…”，在系统窗口中选择日志目录。';
-      $('timeline').append(el('div','empty','可添加多个目录；按 Harness、模型和实验查找任务。'));notice('');
+      showEmptyTrace(activeRoots.length?'暂无匹配的运行记录':'请选择扫描目录',
+        activeRoots.length?'请调整筛选或切换实验 / 独立运行。':'展开左下方“读取目录”，在系统窗口中选择日志目录。',
+        '实验按名称浏览，每条 trace 都会显示 Harness 和模型。');
     }
   } catch(e){if(request===scanVersion)notice(e.message,true);}
   finally {if(request===scanVersion)scanBusy(false);}
 }
-async function load(id) {
+async function load(id, {reveal=false}={}) {
+  const file=files.find(candidate=>candidate.id===id);
+  if(file)showFileInNavigation(file,reveal);
   selected=id;fileList();const request=++loadVersion;notice('正在读取…');
   try {const trace=await api('/api/trace?id='+encodeURIComponent(id)+'&'+rootsQuery(activeRoots));if(request!==loadVersion)return;render(trace);}
-  catch(e){if(request!==loadVersion)return;notice(e.message,true);$('title').textContent='无法读取此日志';$('subtitle').textContent=files.find(f=>f.id===id)?.name||'';$('metrics').replaceChildren();$('coverage').textContent='';$('timeline').replaceChildren();$('source-section').hidden=true;$('trial-summary').hidden=true;}
+  catch(e){if(request!==loadVersion)return;notice(e.message,true);$('title').textContent='无法读取此日志';$('subtitle').textContent=files.find(f=>f.id===id)?.name||'';$('metrics').replaceChildren();$('coverage').textContent='';$('timeline').replaceChildren();$('source-section').hidden=true;$('trial-summary').hidden=true;$('trace-context').replaceChildren();$('trace-context').hidden=true;}
 }
 
 function updateExperiments() {
@@ -141,7 +268,7 @@ function updateExperiments() {
   for(const experiment of experiments)select.add(new Option(`${experiment.name} · ${experiment.directory}`,experiment.id));
   const preferred=experiments.some(e=>e.id===previous)?previous:files.find(f=>experiments.some(e=>e.id===f.experiment_id))?.experiment_id;
   if(preferred)select.value=preferred;
-  $('experiment-section').hidden=!experiments.length;
+  $('experiment-section').hidden=navigationMode!=='experiments'||!experiments.length;
   updateComparisonTasks();
 }
 function updateComparisonTasks() {
@@ -153,18 +280,17 @@ function updateComparisonTasks() {
   if([...select.options].some(o=>o.value===previous))select.value=previous;
   renderComparison();
 }
-function openComparisonTrace() {
+function openComparisonTrace({reveal=false}={}) {
   const experiment=experiments.find(e=>e.id===$('compare-experiment').value);
   if(!experiment)return;
   const task=$('compare-task').value;
   const candidates=files.filter(f=>f.experiment_id===experiment.id&&(!task||f.task_id===task));
-  if(candidates.some(f=>f.id===selected))return;
-  if(candidates.length)return load(candidates[0].id);
+  const current=candidates.find(file=>file.id===selected);
+  if(current){if(reveal){showFileInNavigation(current,true);fileList();}return;}
+  if(candidates.length)return load(candidates[0].id,{reveal});
   // Do not leave another experiment's metrics below a result with no trace.
-  ++loadVersion;clearTrace();fileList();notice('');
-  $('title').textContent='所选实验没有可读取的 trace';
-  $('subtitle').textContent=experiment.directory;
-  $('timeline').append(el('div','empty','当前实验或任务没有关联的 trace，请查看上方 trial 状态和错误。'));
+  showEmptyTrace('所选实验没有可读取的 trace',experiment.directory,
+    '当前实验或任务没有关联的 trace，请查看上方 trial 状态和错误。');
 }
 function comparisonTable(container, headings) {
   container.replaceChildren();const table=el('table','comparison-table'), head=el('thead',''), row=el('tr','');
@@ -212,7 +338,7 @@ function renderComparison() {
         cell.append(el('small','',`耗时：${fmt(trial.duration_sec)} s · 结束：${trial.finish_reason||'未知'}`));
         if(file) {
           const open=el('button','open-trace','查看 trace');open.type='button';
-          open.addEventListener('click',async()=>{await load(file.id);$('title').scrollIntoView({block:'start'});});cell.append(open);
+          open.addEventListener('click',async()=>{await load(file.id,{reveal:true});$('title').scrollIntoView({block:'start'});});cell.append(open);
           if(file.error)cell.append(el('small','comparison-error',file.error));
         } else cell.append(el('small','comparison-error',trial.trace_error||'扫描范围内没有可读取的 trace'));
         if(trial.errors?.length)cell.append(extra('trial 错误',trial.errors));
@@ -259,7 +385,8 @@ function toolCard(call,result) {
 function render(trace) {
   const metadata=trace.metadata;
   $('title').textContent=metadata.title;
-  $('subtitle').textContent=`${metadata.harness} · ${metadata.models.join(' / ')} · ${metadata.experiment}${metadata.condition?' · '+metadata.condition+' / repeat '+metadata.repeat:''}\n${trace.format} · ${trace.file} · Session: ${trace.session_id||'未知'}`;
+  renderTraceContext(metadata);
+  $('subtitle').textContent=`${trace.format} · ${trace.file} · Session: ${trace.session_id||'未知'}`;
   const trial=trace.trial;
   if(experiments.some(e=>e.id===metadata.experiment_id)) {
     const experimentSelect=$('compare-experiment');
@@ -307,8 +434,10 @@ function render(trace) {
 }
 $('refresh').addEventListener('click',()=>refresh());
 $('choose-root').addEventListener('click',chooseRoot);
-for(const id of ['filter-harness','filter-model','filter-experiment','filter-condition'])$(id).addEventListener('change',fileList);
-$('compare-experiment').addEventListener('change',()=>{updateComparisonTasks();openComparisonTrace();});
-$('compare-task').addEventListener('change',()=>{renderComparison();openComparisonTrace();});
+for(const id of ['filter-harness','filter-model','filter-condition'])$(id).addEventListener('change',fileList);
+$('nav-experiments').addEventListener('click',()=>switchNavigation('experiments'));
+$('nav-standalone').addEventListener('click',()=>switchNavigation('standalone'));
+$('compare-experiment').addEventListener('change',()=>{updateComparisonTasks();openComparisonTrace({reveal:true});});
+$('compare-task').addEventListener('change',()=>{renderComparison();openComparisonTrace({reveal:true});});
 $('search').addEventListener('input',fileList);
 refresh();

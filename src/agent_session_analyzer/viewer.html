@@ -4,22 +4,27 @@
 <body>
 <aside>
   <div class="brand"><span class="brand-icon">▤</span><div>Harness Trace<small>运行记录</small></div></div>
-  <section class="scan-controls" aria-label="扫描目录">
-    <button id="choose-root" type="button">选择扫描目录…</button>
-    <small id="scan-help">通过系统窗口选择目录，自动递归扫描 JSONL；可添加多个目录。</small>
-    <ul id="selected-roots" aria-label="已选择的扫描目录"></ul>
-  </section>
-  <div class="side-heading"><span>已保存的会话</span><button id="refresh" title="刷新文件与当前会话">刷新</button></div>
+  <div class="side-heading"><span>实验与会话</span><button id="refresh" title="刷新文件与当前会话">刷新</button></div>
+  <div class="navigation-mode" role="group" aria-label="运行类型">
+    <button id="nav-experiments" type="button" aria-pressed="true">实验 <span id="experiment-count">0</span></button>
+    <button id="nav-standalone" type="button" aria-pressed="false">独立运行 <span id="standalone-count">0</span></button>
+  </div>
   <input id="search" type="search" placeholder="搜索任务、实验、模型或文件名…" aria-label="搜索会话">
   <div class="filters" aria-label="分类筛选">
     <label>Harness<select id="filter-harness"><option value="">全部 Harness</option></select></label>
     <label>模型<select id="filter-model"><option value="">全部模型</option></select></label>
-    <label>实验<select id="filter-experiment"><option value="">全部实验</option></select></label>
     <label>条件<select id="filter-condition"><option value="">全部 condition</option></select></label>
   </div>
   <small id="file-count" aria-live="polite"></small>
-  <nav id="files" aria-label="会话文件"></nav>
-  <details class="roots"><summary>读取目录</summary><pre id="roots"></pre></details>
+  <nav id="files" aria-label="实验和运行记录"></nav>
+  <details id="scan-controls" class="scan-controls">
+    <summary><span>读取目录</span><small id="root-count">未选择</small></summary>
+    <div class="scan-content">
+      <button id="choose-root" type="button">选择扫描目录…</button>
+      <small id="scan-help">通过系统窗口添加日志目录，自动识别实验及独立运行；可添加多个目录。</small>
+      <ul id="selected-roots" aria-label="已选择的扫描目录"></ul>
+    </div>
+  </details>
 </aside>
 <main>
   <section id="experiment-section" class="experiment-panel" hidden aria-label="实验条件对比">
@@ -34,7 +39,7 @@
     <p class="muted">同一实验按 task + repeat 配对；缺失值保留未知。耗时包含准备、执行、评分和清理。</p>
     <div id="trial-comparison" class="comparison-scroll trial-matrix"></div>
   </section>
-  <header><div class="eyebrow">SESSION EXPLORER</div><h1 id="title">选择一个会话</h1><p id="subtitle">从左侧打开已保存的 JSONL，查看执行层级和模型消耗。</p></header>
+  <header><div class="eyebrow">SESSION EXPLORER</div><div id="trace-context" class="trace-context" aria-label="当前运行归属" hidden></div><h1 id="title">选择一个会话</h1><p id="subtitle">从左侧打开已保存的 JSONL，查看执行层级和模型消耗。</p></header>
   <div id="message" role="status"></div>
   <section id="metrics" class="metrics" aria-label="统计"></section>
   <p id="coverage" class="muted"></p>
