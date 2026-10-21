@@ -11,8 +11,8 @@ const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN',{max
 const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 function el(tag, cls, text) { const n=document.createElement(tag); if(cls)n.className=cls; if(text!=null)n.textContent=text; return n; }
 function badge(text, kind='') { return el('span','badge '+kind,text); }
-function metricCard(label, value, detail) {
-  const card=el('div','metric');
+function metricCard(label, value, detail, tone) {
+  const card=el('div','metric metric-'+tone);
   card.append(el('div','label',label),el('strong','',value),el('small','',detail));return card;
 }
 function notice(text, error=false) { $('message').replaceChildren(); if(text)$('message').append(el('div','notice'+(error?' error':''),text)); }
@@ -369,10 +369,10 @@ function renderComparison() {
   const taskIds=new Set([...trials.map(trial=>trial.task_id),
     ...files.filter(file=>file.experiment_id===experiment.id&&(!task||file.task_id===task)).map(file=>file.task_id)].filter(Boolean));
   $('comparison-metrics').replaceChildren(
-    metricCard('对比条件',experiment.conditions.length,'所选实验的运行条件'),
-    metricCard('可查看任务',taskIds.size,task?'已筛选到单个任务':'结果或 trace 中已识别的任务'),
-    metricCard('已记录 trial',trials.length,task?'当前任务的重复运行':'所选实验的全部运行'),
-    metricCard('已有评分',trials.filter(trial=>trial.reward!=null).length,'缺失评分不计为零'));
+    metricCard('对比条件',experiment.conditions.length,'所选实验的运行条件','blue'),
+    metricCard('可查看任务',taskIds.size,task?'已筛选到单个任务':'结果或 trace 中已识别的任务','cyan'),
+    metricCard('已记录 trial',trials.length,task?'当前任务的重复运行':'所选实验的全部运行','violet'),
+    metricCard('已有评分',trials.filter(trial=>trial.reward!=null).length,'缺失评分不计为零','amber'));
   $('experiment-status').textContent=`${experiment.status} · 已记录 ${experiment.trials.length} / ${experiment.planned_trials??'未知'} 个 trial · ${experiment.directory}`;
   $('experiment-warnings').replaceChildren();
   if(experiment.warnings.length)$('experiment-warnings').append(el('div','notice error',experiment.warnings.join('\n')));
@@ -478,7 +478,7 @@ function render(trace) {
   const captureWarnings=trace.events.filter(e=>e.event==='capture.warning').map(e=>e.data?.message).filter(Boolean);
   notice([...trace.warnings,...failures,...new Set(captureWarnings)].join('\n'),failures.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;
   $('metrics').replaceChildren();
-  for(const [label,value,detail] of [['总 token'+(partial?'（已知部分）':''),fmt(t.total_tokens),'只累计每次 attempt 的汇总 usage'],['模型尝试',s.attempts,'包括已观测到的失败 / 重试'],['工具调用',s.tools,'模型请求的工具调用数'],['轮次 / 步骤',`${s.turns} / ${s.steps}`,'Turn / Step']]){const c=el('div','metric');c.append(el('div','label',label),el('strong','',value),el('small','',detail));$('metrics').append(c);}
+  for(const [label,value,detail,tone] of [['总 token'+(partial?'（已知部分）':''),fmt(t.total_tokens),'只累计每次 attempt 的汇总 usage','blue'],['模型尝试',s.attempts,'包括已观测到的失败 / 重试','violet'],['工具调用',s.tools,'模型请求的工具调用数','cyan'],['轮次 / 步骤',`${s.turns} / ${s.steps}`,'Turn / Step','amber']])$('metrics').append(metricCard(label,value,detail,tone));
   $('coverage').textContent=`总 token 覆盖 ${s.usage_coverage.total_tokens}/${s.attempts} 个尝试 · 输入/缓存/思考保留来源口径，不重复相加。工具耗时是日志事件间隔；OpenHands step 为派生分组，耗时未知。`;
   const turns=new Map(),outside=[];
   for(const e of trace.events){if(e.turn_id==null){outside.push(e);continue;}if(!turns.has(e.turn_id))turns.set(e.turn_id,[]);turns.get(e.turn_id).push(e);}
