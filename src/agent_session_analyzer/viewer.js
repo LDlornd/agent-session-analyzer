@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const initialQuery = new URLSearchParams(location.search);
+let activeView = initialQuery.get('view')==='compare'?'compare':'explorer';
 let files = [], selected = null, loadVersion = 0, scanVersion = 0;
 let activeRoots = initialQuery.has('root') ? initialQuery.getAll('root') : null;
 let experiments = [];
@@ -10,12 +11,43 @@ const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN',{max
 const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 function el(tag, cls, text) { const n=document.createElement(tag); if(cls)n.className=cls; if(text!=null)n.textContent=text; return n; }
 function badge(text, kind='') { return el('span','badge '+kind,text); }
+function metricCard(label, value, detail) {
+  const card=el('div','metric');
+  card.append(el('div','label',label),el('strong','',value),el('small','',detail));return card;
+}
 function notice(text, error=false) { $('message').replaceChildren(); if(text)$('message').append(el('div','notice'+(error?' error':''),text)); }
 function extra(title, value) { const d=el('details','extra');d.append(el('summary','',title),el('pre','',pretty(value)));return d; }
 function block(parent,title,value,cls='answer') { parent.append(el('div','block-title',title),el('div',cls,value == null ? '未提供' : value)); }
 function duration(start,end) { return start != null && end != null && end>=start ? ((end-start)/1000).toFixed(2)+' s' : '耗时未知'; }
 async function api(url, options) { const r=await fetch(url, options); const data=await r.json(); if(!r.ok)throw new Error(data.error||r.statusText); return data; }
 function experimentFor(file) { return experiments.find(experiment=>experiment.id===file.experiment_id); }
+function updateView() {
+  const comparing=activeView==='compare';
+  $('trace-page').hidden=comparing;$('experiment-section').hidden=!comparing;
+  $('comparison-empty').hidden=experiments.length>0;$('comparison-content').hidden=!experiments.length;
+  $('navigation-mode').hidden=comparing;$('trace-filters').hidden=comparing;
+  $('sidebar-heading').textContent=comparing?'选择对比实验':'实验与会话';
+  $('search').placeholder=comparing?'搜索实验名称或任务…':'搜索任务、实验、模型或文件名…';
+  $('search').setAttribute('aria-label',comparing?'搜索实验':'搜索会话');
+  $('files').setAttribute('aria-label',comparing?'可对比的实验':'实验和运行记录');
+  document.title=(comparing?'实验对比':'实验查看')+' · Harness Trace';
+  for(const view of ['explorer','compare']) {
+    const link=$('view-'+view), address=new URL(location.href);
+    address.searchParams.set('view',view);link.href=address.href;
+    if(view===activeView)link.setAttribute('aria-current','page');
+    else link.removeAttribute('aria-current');
+  }
+}
+function switchView(view, {updateHistory=true, focus=false}={}) {
+  const changed=activeView!==view;activeView=view;
+  if(updateHistory&&changed) {
+    const address=new URL(location.href);address.searchParams.set('view',view);
+    history.pushState(null,'',address);
+  }
+  fileList();
+  if(changed&&view==='compare')openComparisonTrace({reveal:true});
+  if(focus)$(view==='compare'?'comparison-title':'title').focus({preventScroll:true});
+}
 function navigationFiles() {
   return files.filter(file=>Boolean(experimentFor(file))===(navigationMode==='experiments'));
 }
@@ -136,12 +168,37 @@ function experimentGroups(parent, items) {
   }
   return count;
 }
+function comparisonExperimentList(parent) {
+  const query=$('search').value.trim().toLowerCase();
+  let count=0;
+  for(const experiment of experiments) {
+    const items=files.filter(file=>file.experiment_id===experiment.id);
+    const searchable=[experiment.name,experiment.directory,...experiment.trials.map(trial=>trial.task_id),...items.map(file=>file.title)];
+    if(!searchable.join(' ').toLowerCase().includes(query))continue;
+    count++;
+    const chosen=$('compare-experiment').value===experiment.id;
+    const button=el('button','experiment-choice'+(chosen?' active':''));button.type='button';
+    button.setAttribute('aria-pressed',String(chosen));button.title=experiment.directory;
+    button.append(el('span','experiment-name',experiment.name));
+    const metadata=el('span','experiment-choice-meta');
+    metadata.append(el('span','',`${experiment.conditions.length} 个条件`),el('span','',`${experiment.trials.length} 个 trial`));
+    button.append(metadata,el('small','experiment-choice-path',experiment.directory));
+    button.addEventListener('click',()=>selectExperiment(experiment,items));parent.append(button);
+  }
+  return count;
+}
 function fileList() {
-  $('files').replaceChildren();const visible=matchingFiles(), total=navigationFiles().length;
+  $('files').replaceChildren();updateView();
   const independent=files.filter(file=>!experimentFor(file)).length;
   $('experiment-count').textContent=experiments.length;$('standalone-count').textContent=independent;
   for(const [id,mode] of [['nav-experiments','experiments'],['nav-standalone','standalone']])$(id).setAttribute('aria-pressed',String(navigationMode===mode));
-  $('experiment-section').hidden=navigationMode!=='experiments'||!experiments.length;
+  if(activeView==='compare') {
+    const count=comparisonExperimentList($('files'));
+    $('file-count').textContent=`${count}/${experiments.length} 个实验 · 按条件对比`;
+    if(!count)$('files').append(el('p','navigation-empty',experiments.length?'没有匹配的实验，请调整搜索。':'添加实验日志目录后，在这里选择需要对比的实验。'));
+    return;
+  }
+  const visible=matchingFiles(), total=navigationFiles().length;
   if(navigationMode==='experiments') {
     const count=experimentGroups($('files'),visible);
     $('file-count').textContent=`${count} 个实验 · ${visible.length}/${total} 条 trace · 最近运行优先`;
@@ -268,7 +325,7 @@ function updateExperiments() {
   for(const experiment of experiments)select.add(new Option(`${experiment.name} · ${experiment.directory}`,experiment.id));
   const preferred=experiments.some(e=>e.id===previous)?previous:files.find(f=>experiments.some(e=>e.id===f.experiment_id))?.experiment_id;
   if(preferred)select.value=preferred;
-  $('experiment-section').hidden=navigationMode!=='experiments'||!experiments.length;
+  updateView();
   updateComparisonTasks();
 }
 function updateComparisonTasks() {
@@ -303,8 +360,19 @@ function average(rows, value) {
 }
 function renderComparison() {
   const experiment=experiments.find(e=>e.id===$('compare-experiment').value);
-  if(!experiment)return;
+  $('compare-experiment').disabled=!experiments.length;$('compare-task').disabled=!experiment;
+  if(!experiment) {
+    for(const id of ['comparison-metrics','condition-summary','trial-comparison','experiment-warnings'])$(id).replaceChildren();
+    $('experiment-status').textContent='';return;
+  }
   const task=$('compare-task').value, trials=experiment.trials.filter(t=>!task||t.task_id===task);
+  const taskIds=new Set([...trials.map(trial=>trial.task_id),
+    ...files.filter(file=>file.experiment_id===experiment.id&&(!task||file.task_id===task)).map(file=>file.task_id)].filter(Boolean));
+  $('comparison-metrics').replaceChildren(
+    metricCard('对比条件',experiment.conditions.length,'所选实验的运行条件'),
+    metricCard('可查看任务',taskIds.size,task?'已筛选到单个任务':'结果或 trace 中已识别的任务'),
+    metricCard('已记录 trial',trials.length,task?'当前任务的重复运行':'所选实验的全部运行'),
+    metricCard('已有评分',trials.filter(trial=>trial.reward!=null).length,'缺失评分不计为零'));
   $('experiment-status').textContent=`${experiment.status} · 已记录 ${experiment.trials.length} / ${experiment.planned_trials??'未知'} 个 trial · ${experiment.directory}`;
   $('experiment-warnings').replaceChildren();
   if(experiment.warnings.length)$('experiment-warnings').append(el('div','notice error',experiment.warnings.join('\n')));
@@ -323,7 +391,8 @@ function renderComparison() {
     if(!pairs.has(key))pairs.set(key,[]);pairs.get(key).push(trial);
   }
   for(const [key,rows] of [...pairs].sort(([a],[b])=>a.localeCompare(b))) {
-    const [taskId,repeat]=JSON.parse(key), tr=el('tr','');tr.append(el('th','',`${taskId} / ${repeat}`));
+    const [taskId,repeat]=JSON.parse(key), tr=el('tr',''), heading=el('th','',`${taskId} / ${repeat}`);
+    heading.scope='row';tr.append(heading);
     for(const condition of experiment.conditions) {
       const td=el('td',''), matching=rows.filter(t=>t.condition===condition);
       if(!matching.length)td.append(el('span','muted','尚无结果'));
@@ -338,7 +407,10 @@ function renderComparison() {
         cell.append(el('small','',`耗时：${fmt(trial.duration_sec)} s · 结束：${trial.finish_reason||'未知'}`));
         if(file) {
           const open=el('button','open-trace','查看 trace');open.type='button';
-          open.addEventListener('click',async()=>{await load(file.id,{reveal:true});$('title').scrollIntoView({block:'start'});});cell.append(open);
+          open.addEventListener('click',async()=>{
+            switchView('explorer');await load(file.id,{reveal:true});
+            if(selected===file.id&&activeView==='explorer'){$('title').focus({preventScroll:true});$('title').scrollIntoView({block:'start'});}
+          });cell.append(open);
           if(file.error)cell.append(el('small','comparison-error',file.error));
         } else cell.append(el('small','comparison-error',trial.trace_error||'扫描范围内没有可读取的 trace'));
         if(trial.errors?.length)cell.append(extra('trial 错误',trial.errors));
@@ -440,4 +512,15 @@ $('nav-standalone').addEventListener('click',()=>switchNavigation('standalone'))
 $('compare-experiment').addEventListener('change',()=>{updateComparisonTasks();openComparisonTrace({reveal:true});});
 $('compare-task').addEventListener('change',()=>{renderComparison();openComparisonTrace({reveal:true});});
 $('search').addEventListener('input',fileList);
+for(const view of ['explorer','compare'])$('view-'+view).addEventListener('click',event=>{
+  if(event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;
+  event.preventDefault();switchView(view,{focus:true});
+});
+window.addEventListener('popstate',()=>{
+  const query=new URLSearchParams(location.search);
+  switchView(query.get('view')==='compare'?'compare':'explorer',{updateHistory:false,focus:true});
+  const roots=query.has('root')?query.getAll('root').filter(Boolean):null;
+  if(JSON.stringify(roots)!==JSON.stringify(activeRoots))refresh(roots);
+});
+updateView();
 refresh();

@@ -1,16 +1,17 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Harness Trace · 运行记录</title><link rel="stylesheet" href="/viewer.css"><script src="/viewer.js" defer></script></head>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>实验查看 · Harness Trace</title><link rel="stylesheet" href="/viewer.css"><script src="/viewer.js" defer></script></head>
 <body>
+<a class="skip-link" href="#workspace">跳转到主内容</a>
 <aside>
   <div class="brand"><span class="brand-icon">▤</span><div>Harness Trace<small>运行记录</small></div></div>
-  <div class="side-heading"><span>实验与会话</span><button id="refresh" title="刷新文件与当前会话">刷新</button></div>
-  <div class="navigation-mode" role="group" aria-label="运行类型">
+  <div class="side-heading"><span id="sidebar-heading">实验与会话</span><button id="refresh" title="刷新文件与当前会话">刷新</button></div>
+  <div id="navigation-mode" class="navigation-mode" role="group" aria-label="运行类型">
     <button id="nav-experiments" type="button" aria-pressed="true">实验 <span id="experiment-count">0</span></button>
     <button id="nav-standalone" type="button" aria-pressed="false">独立运行 <span id="standalone-count">0</span></button>
   </div>
   <input id="search" type="search" placeholder="搜索任务、实验、模型或文件名…" aria-label="搜索会话">
-  <div class="filters" aria-label="分类筛选">
+  <div id="trace-filters" class="filters" aria-label="分类筛选">
     <label>Harness<select id="filter-harness"><option value="">全部 Harness</option></select></label>
     <label>模型<select id="filter-model"><option value="">全部模型</option></select></label>
     <label>条件<select id="filter-condition"><option value="">全部 condition</option></select></label>
@@ -26,26 +27,45 @@
     </div>
   </details>
 </aside>
-<main>
+<main id="workspace" tabindex="-1">
+  <div class="workspace-bar">
+    <nav class="workspace-navigation" aria-label="主导航">
+      <a id="view-explorer" href="?view=explorer" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18m4-12h4m-4 6h4"/></svg>实验查看</a>
+      <a id="view-compare" href="?view=compare"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9m5 10V5m6 14v-7m5 7V3M2 21h20"/></svg>实验对比</a>
+    </nav>
+    <span class="workspace-status"><span aria-hidden="true"></span>本地日志工作台</span>
+  </div>
+  <div id="message" role="status"></div>
   <section id="experiment-section" class="experiment-panel" hidden aria-label="实验条件对比">
-    <h2>实验条件对比</h2>
+    <header class="page-heading">
+      <div class="eyebrow">EXPERIMENT COMPARISON</div>
+      <h1 id="comparison-title" tabindex="-1">实验对比</h1>
+      <p class="page-description">按任务与重复运行对齐实验条件，比较评分、消耗和执行结果。</p>
+    </header>
+    <div id="comparison-empty" class="empty" hidden><strong>暂无可对比的实验</strong><p>从左下方添加包含实验结果的日志目录，或切换到“实验查看”浏览独立运行。</p></div>
+    <div id="comparison-content">
     <div class="comparison-controls">
       <label>实验<select id="compare-experiment"></select></label>
       <label>任务<select id="compare-task"><option value="">全部任务</option></select></label>
     </div>
     <p id="experiment-status" class="muted"></p>
     <div id="experiment-warnings" role="status"></div>
-    <div id="condition-summary" class="comparison-scroll"></div>
-    <p class="muted">同一实验按 task + repeat 配对；缺失值保留未知。耗时包含准备、执行、评分和清理。</p>
-    <div id="trial-comparison" class="comparison-scroll trial-matrix"></div>
+    <section id="comparison-metrics" class="metrics" aria-label="所选实验概览"></section>
+    <div class="section-heading"><h2>条件汇总</h2><span class="section-label">评分与运行消耗</span></div>
+    <div id="condition-summary" class="comparison-scroll" tabindex="0" role="region" aria-label="条件汇总表，可横向滚动"></div>
+    <p class="comparison-note">同一实验按 task + repeat 配对；缺失值保留未知。耗时包含准备、执行、评分和清理。</p>
+    <div class="section-heading"><h2>逐次运行对比</h2><span class="section-label">点击“查看 trace”进入实验查看</span></div>
+    <div id="trial-comparison" class="comparison-scroll trial-matrix" tabindex="0" role="region" aria-label="逐次运行对比表，可横向滚动"></div>
+    </div>
   </section>
-  <header><div class="eyebrow">SESSION EXPLORER</div><div id="trace-context" class="trace-context" aria-label="当前运行归属" hidden></div><h1 id="title">选择一个会话</h1><p id="subtitle">从左侧打开已保存的 JSONL，查看执行层级和模型消耗。</p></header>
-  <div id="message" role="status"></div>
+  <section id="trace-page" aria-label="实验查看">
+  <header class="page-heading"><div class="eyebrow">SESSION EXPLORER</div><div id="trace-context" class="trace-context" aria-label="当前运行归属" hidden></div><h1 id="title" tabindex="-1">选择一个会话</h1><p id="subtitle">从左侧打开已保存的 JSONL，查看执行层级和模型消耗。</p></header>
   <section id="metrics" class="metrics" aria-label="统计"></section>
   <p id="coverage" class="muted"></p>
   <p id="trial-summary" class="trial-summary" hidden></p>
-  <div class="section-heading"><h2>执行轨迹</h2><span class="muted">Session / Turn / Step / Attempt · Tool</span></div>
+  <div class="section-heading"><h2>执行轨迹</h2><span class="section-label">Session / Turn / Step / Attempt · Tool</span></div>
   <section id="timeline"><div class="empty">尚未选择文件</div></section>
   <details id="source-section" hidden><summary>全部事件 · 原始记录</summary><pre id="source"></pre></details>
+  </section>
 </main>
 </body></html>
