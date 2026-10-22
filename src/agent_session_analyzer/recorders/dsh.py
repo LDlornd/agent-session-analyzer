@@ -29,6 +29,7 @@ class DshRecorder:
         self.paths: dict[str, Path] = {}
         self._files = {}
         self._adapters = {}
+        self._run_ids = {}
         self._lock = threading.RLock()
         self._running = False
         self._closed = False
@@ -71,6 +72,24 @@ class DshRecorder:
                                   "reasoning": "only content exposed by the provider",
                                   "api_attempt_coverage": "dsh-visible attempts; hidden transport retries unavailable"}}, sync=True)
 
+    def record_failure(self, error: dict, *, session_id: str):
+        """Record a caller-owned failure after run() has joined, e.g. a tool channel error.
+
+        The caller supplies JSON-safe, redacted diagnostic fields. Keep any SDK
+        run.failed event too: runtime closure and its upstream cause are distinct.
+        """
+        with self._lock:
+            if self._closed or self._running:
+                raise RuntimeError("Record external failures after run() joins and before close()")
+            self._session(session_id, session_id, {})
+            self.last_path = self.paths[session_id]
+            self._write(session_id, {
+                "schema": SCHEMA, "event": "run.failed", "session_id": session_id,
+                "run_id": self._run_ids.get(session_id),
+                "time_ms": time.time_ns() // 1_000_000,
+                "data": {**error, "source": "runner"},
+            }, sync=True)
+
     def run(self, harness, input, *, session_id=None, on_notification=None):
         """Drop-in equivalent of harness.run(input, ...), returning its RunResult.
 
@@ -91,6 +110,7 @@ class DshRecorder:
         try:
             with self._lock:
                 self._session(sid, sid, model)
+                self._run_ids[sid] = run_id
                 self.last_path = self.paths[sid]
                 self._write(sid, {"schema": SCHEMA, "event": "run.started", "session_id": sid,
                                  "run_id": run_id, "time_ms": time.time_ns() // 1_000_000,

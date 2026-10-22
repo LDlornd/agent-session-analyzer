@@ -90,7 +90,8 @@ class OpenHandsRecorder:
         adapter = OpenHandsAdapter(sid, model)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         path = self.log_dir / f"{hashlib.sha256(sid.encode()).hexdigest()[:16]}-{self.recording_id}.jsonl"
-        binding = {"adapter": adapter, "file": path.open("x", encoding="utf-8", newline="\n"), "run_id": None}
+        binding = {"adapter": adapter, "file": path.open("x", encoding="utf-8", newline="\n"),
+                   "run_id": None, "last_run_id": None}
         try:
             try:
                 sdk_version = version("openhands-sdk")
@@ -117,6 +118,21 @@ class OpenHandsRecorder:
         except BaseException:
             binding["file"].close()
             raise
+
+    def record_failure(self, error: dict, *, session_id: str):
+        """Record redacted caller diagnostics after run() joins and before close()."""
+        with self._lock:
+            self._check()
+            if self._running:
+                raise RuntimeError("Record external failures after run() joins")
+            binding = self._bindings[session_id]
+            # Native callbacks outside run() retain run_id=None; this diagnostic
+            # explicitly belongs to the most recent run of this conversation.
+            failure_binding = {**binding, "run_id": binding["last_run_id"]}
+            self._write(failure_binding, [binding["adapter"].row(
+                "run.failed", {**error, "source": "runner"},
+            )], sync=True)
+            self.last_path = self.paths[session_id]
 
     def _install_hooks(self, conversation, binding, restores):
         seen_telemetry = set()
@@ -168,6 +184,7 @@ class OpenHandsRecorder:
             self._running = True
         adapter = binding["adapter"]
         binding["run_id"] = uuid.uuid4().hex
+        binding["last_run_id"] = binding["run_id"]
         self.last_path = self.paths[str(conversation.id)]
         restores = []
         try:
