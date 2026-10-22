@@ -52,6 +52,11 @@ function renderTrialStages(trial) {
 }
 async function api(url, options) { const r=await fetch(url, options); const data=await r.json(); if(!r.ok)throw new Error(data.error||r.statusText); return data; }
 function experimentFor(file) { return experiments.find(experiment=>experiment.id===file.experiment_id); }
+function executionBadge(status, originalStatus) {
+  const labels={success:'执行成功',failure:'执行失败',running:'运行中',unknown:'状态未知'};
+  const node=el('span','execution-status '+(status||'unknown'),labels[status]||labels.unknown);
+  node.title=(originalStatus?`原始状态：${originalStatus}。`:'')+'执行状态不代表 reward 评分是否通过。';return node;
+}
 function showCopySuccess() {
   clearTimeout(copySuccessTimer);
   $('copy-success-card').hidden=false;
@@ -134,17 +139,14 @@ function updateFilters() {
   }
 }
 function fileButton(f, {showRepeat=false}={}) {
-  const b=el('button','file'+(selected===f.id?' active':''));
+  const state=f.execution_status||'unknown';
+  const b=el('button','file outcome-'+state+(selected===f.id?' active':''));
   b.type='button';
   b.setAttribute('aria-pressed',String(selected===f.id));
   b.title=`${f.title}\n${f.root} / ${f.name}`;
   const title=showRepeat?`Repeat ${f.repeat??'未知'}${f.condition?' · '+f.condition:''}`:f.title;
   const heading=el('span','file-heading');heading.append(el('span','file-title',title));
-  const status=f.trial?.status;
-  const labels={completed:'已完成',error:'失败',cancelled:'已取消',running:'运行中',interrupted:'已中断'};
-  if(f.error)heading.append(el('span','file-status error','读取失败'));
-  else if(status)heading.append(el('span','file-status',labels[status]||status));
-  else if(f.trial?.result_recorded===false)heading.append(el('span','file-status','结果未记录'));
+  heading.append(executionBadge(state,f.trial?.status));
   b.append(heading);
   if(!showRepeat&&f.task_id&&f.task_id!==f.title)b.append(el('small','file-task-id',f.task_id));
   const owners=el('span','file-owners');
@@ -155,20 +157,21 @@ function fileButton(f, {showRepeat=false}={}) {
   if(!experimentFor(f)&&f.experiment!=='独立运行')b.append(el('small','file-recording-label',`标签：${f.experiment}`));
   b.append(el('small','file-path',f.name));
   b.append(el('small','',new Date(f.modified_ms).toLocaleString('zh-CN')+' · '+(f.size/1024).toFixed(1)+' KB'));
-  if(f.error)b.append(el('small','file-error',f.error));
+  if(f.error)b.append(el('small','file-error',`读取失败：${f.error}`));
   b.addEventListener('click',()=>load(f.id,{reveal:true}));
   // Keep the copy control beside the trace button, not nested inside it.
   const entry=el('div','trace-entry');entry.append(b,traceDirectoryCopy(f));return entry;
 }
 function matchingFiles() {
   const query=$('search').value.trim().toLowerCase(), harness=$('filter-harness').value;
-  const model=$('filter-model').value, condition=$('filter-condition').value;
+  const model=$('filter-model').value, condition=$('filter-condition').value, status=$('filter-status').value;
   return navigationFiles().filter(f=>(!harness||f.harness===harness)&&(!model||f.models.includes(model))&&
     (!condition||f.condition===condition)&&
+    (!status||(f.execution_status||'unknown')===status)&&
     [f.title,f.task_id,f.name,f.root,f.harness,...f.models,f.experiment,f.condition].join(' ').toLowerCase().includes(query));
 }
 function matchesEmptyExperiment(experiment) {
-  if($('filter-harness').value)return false;
+  if($('filter-harness').value||$('filter-status').value)return false;
   const model=$('filter-model').value, condition=$('filter-condition').value;
   if(model&&!experiment.trials.some(trial=>trial.model===model))return false;
   if(condition&&!experiment.conditions.includes(condition))return false;
@@ -286,7 +289,7 @@ function showFileInNavigation(file, reveal) {
     if(experiment){groupState.set(experiment.id,true);groupState.set(taskGroupKey(file),true);}
     if(!matchingFiles().some(candidate=>candidate.id===file.id)) {
       $('search').value='';
-      for(const id of ['filter-harness','filter-model','filter-condition'])$(id).value='';
+      for(const id of ['filter-harness','filter-model','filter-condition','filter-status'])$(id).value='';
     }
   }
 }
@@ -310,6 +313,7 @@ function renderTraceContext(metadata) {
   container.append(el('span','context-experiment',label),
     el('span','context-owner',`Harness · ${metadata.harness}`),el('span','context-owner',`模型 · ${metadata.models.join(' / ')}`));
   if(metadata.condition)container.append(el('span','context-condition',`${metadata.condition} · repeat ${metadata.repeat??'未知'}`));
+  container.append(executionBadge(metadata.execution_status));
 }
 function showRoots() {
   $('selected-roots').replaceChildren();
@@ -491,8 +495,8 @@ function renderComparison() {
       if(!matching.length)td.append(el('span','muted','尚无结果'));
       for(const trial of matching) {
         const file=files.find(f=>f.id===trial.trace_id);
-        const cell=el('div','trial-cell');
-        cell.append(badge(trial.status||'未知',trial.status==='completed'?'good':'bad'),el('strong','',`reward ${fmt(trial.reward)}`));
+        const cell=el('div','trial-cell outcome-'+(trial.execution_status||'unknown'));
+        cell.append(executionBadge(trial.execution_status,trial.status),el('strong','',`reward ${fmt(trial.reward)}`));
         if(trial.result_recorded===false)cell.append(el('small','','阶段快照 · 评分和用量尚未计入最终汇总'));
         cell.append(el('small','',`Harness：${file?.harness||'未知'}`));
         cell.append(el('small','',`模型：${trial.model||'未知'}`));
@@ -602,7 +606,7 @@ function render(trace) {
 }
 $('refresh').addEventListener('click',()=>refresh());
 $('choose-root').addEventListener('click',chooseRoot);
-for(const id of ['filter-harness','filter-model','filter-condition'])$(id).addEventListener('change',fileList);
+for(const id of ['filter-harness','filter-model','filter-condition','filter-status'])$(id).addEventListener('change',fileList);
 $('nav-experiments').addEventListener('click',()=>switchNavigation('experiments'));
 $('nav-standalone').addEventListener('click',()=>switchNavigation('standalone'));
 $('compare-experiment').addEventListener('change',()=>{updateComparisonTasks();openComparisonTrace({reveal:true});});

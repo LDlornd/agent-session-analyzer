@@ -10,6 +10,12 @@ from .adapters.dsh import TOKEN_FIELDS, DshAdapter
 from .adapters.openhands import OpenHandsAdapter, text_content
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
+EXECUTION_STATUSES = {
+    "completed": "success", "finished": "success",
+    "error": "failure", "failed": "failure", "cancelled": "failure",
+    "interrupted": "failure", "timeout": "failure", "stuck": "failure",
+    "max_iterations": "failure", "max_steps": "failure", "running": "running",
+}
 
 
 class UnsupportedTraceFormat(ValueError):
@@ -144,6 +150,34 @@ def _input_text(value) -> str:
     return ""
 
 
+def execution_status(trace: dict, *, trial: dict | None = None) -> str:
+    """Prefer trial execution status; never infer it from reward or a tool error."""
+    status = (trial or {}).get("status")
+    if isinstance(status, str) and status in EXECUTION_STATUSES:
+        return EXECUTION_STATUSES[status]
+    events = trace.get("events", [])
+    for event in reversed(events):
+        kind = event.get("event")
+        if kind == "run.failed":
+            return "failure"
+        if kind == "run.finished":
+            reason = (event.get("data") or {}).get("finish_reason")
+            return EXECUTION_STATUSES.get(reason, "unknown") if isinstance(reason, str) else "unknown"
+        if kind == "run.started":
+            # An unfinished log may be live or interrupted; neither is proven.
+            return "unknown"
+    # Native session logs may have turn boundaries without recorder run events.
+    for event in reversed(events):
+        if event.get("event") == "turn/end":
+            reason = (event.get("data") or {}).get("reason")
+            if isinstance(reason, dict):
+                reason = reason.get("kind")
+            return EXECUTION_STATUSES.get(reason, "unknown") if isinstance(reason, str) else "unknown"
+        if event.get("event") == "turn/start":
+            return "unknown"
+    return "unknown"
+
+
 def trace_metadata(trace: dict, *, trial: dict | None = None) -> dict:
     """Use current experiment directory names; keep standalone recording labels."""
     header = trace.get("header") or {}
@@ -205,6 +239,7 @@ def trace_metadata(trace: dict, *, trial: dict | None = None) -> dict:
             "harness": " / ".join(sorted(harnesses)) or "未知 Harness",
             "models": sorted(labels) or ["未知模型"],
             "experiment": experiment or "独立运行",
+            "execution_status": execution_status(trace, trial=trial),
             "experiment_id": _label(metadata.get("experiment_id")),
             "trial_id": _label(metadata.get("trial_id")),
             "condition": _label(metadata.get("condition")), "repeat": metadata.get("repeat")}

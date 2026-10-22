@@ -7,7 +7,7 @@ import math
 import os
 from pathlib import Path
 
-from .reader import MAX_FILE_BYTES, parse_jsonl
+from .reader import MAX_FILE_BYTES, execution_status, parse_jsonl
 
 
 def path_id(path: Path) -> str:
@@ -48,6 +48,7 @@ def normalize_trial(row: dict) -> dict:
                                     "status", "passed", "agent_runner", "errors")} | {
         "reward": _number(row.get("reward")), "duration_sec": _number(row.get("duration_sec")),
         "stage_durations_sec": durations,
+        "execution_status": execution_status({}, trial=row),
         "finish_reason": agent.get("finish_reason"), "tool_calls": _number(agent.get("tool_calls")),
         "usage": metrics, "trace_id": None, "trace_error": None, "result_recorded": True,
     }
