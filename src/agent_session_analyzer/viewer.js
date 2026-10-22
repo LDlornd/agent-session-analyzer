@@ -8,6 +8,10 @@ let experiments = [];
 let navigationMode = null;
 const groupState = new Map();
 const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:6});
+const TRIAL_STAGES = [['prepare','任务准备'],['environment','环境初始化'],['setup','环境设置'],
+  ['agent','Agent 执行'],['evaluate','结果评分'],['cleanup','环境清理']];
+const seconds = value => value == null ? '未记录' :
+  (value>0&&value<0.001?'<0.001':value.toLocaleString('zh-CN',{maximumFractionDigits:3}))+' s';
 const pretty = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 function el(tag, cls, text) { const n=document.createElement(tag); if(cls)n.className=cls; if(text!=null)n.textContent=text; return n; }
 function badge(text, kind='') { return el('span','badge '+kind,text); }
@@ -19,6 +23,32 @@ function notice(text, error=false) { $('message').replaceChildren(); if(text)$('
 function extra(title, value) { const d=el('details','extra');d.append(el('summary','',title),el('pre','',pretty(value)));return d; }
 function block(parent,title,value,cls='answer') { parent.append(el('div','block-title',title),el('div',cls,value == null ? '未提供' : value)); }
 function duration(start,end) { return start != null && end != null && end>=start ? ((end-start)/1000).toFixed(2)+' s' : '耗时未知'; }
+function stageBreakdown(trial) {
+  const container=el('div','stage-breakdown'), values=trial.stage_durations_sec||{};
+  const known=TRIAL_STAGES.map(([key])=>values[key]).filter(value=>value!=null);
+  const longest=known.length?Math.max(...known):null;
+  const total=known.length?known.reduce((sum,value)=>sum+value,0):null;
+  container.append(el('p','stage-overview',`已记录 ${known.length}/${TRIAL_STAGES.length} 个阶段 · 已记录阶段合计 ${seconds(total)}`));
+  for(const [key,label] of TRIAL_STAGES) {
+    const value=values[key], isLongest=longest>0&&value===longest;
+    const row=el('div','stage-row'+(isLongest?' longest':'')), name=el('span','stage-name',label);
+    if(isLongest)name.append(badge('最长'));
+    const bar=el(value==null?'span':'meter','stage-meter'+(value==null?' missing':''));
+    bar.setAttribute('aria-hidden','true');
+    if(value!=null){bar.min=0;bar.max=longest||1;bar.value=value;}
+    row.append(name,bar,el('span','stage-value',seconds(value)));container.append(row);
+  }
+  container.append(el('p','muted',known.length
+    ? '条形长度按当前最长的已记录阶段缩放；未记录值不计为零，阶段合计不等同于全流程耗时。'
+    : '此记录尚无阶段耗时；旧实验不会从总耗时推算各阶段。'));
+  return container;
+}
+function renderTrialStages(trial) {
+  const container=$('trial-stages');container.replaceChildren();container.hidden=!trial;
+  if(!trial)return;
+  const heading=el('div','section-heading');heading.append(el('h2','','阶段耗时'),el('span','section-label','当前 trial · 单位 s'));
+  container.append(heading,stageBreakdown(trial));
+}
 async function api(url, options) { const r=await fetch(url, options); const data=await r.json(); if(!r.ok)throw new Error(data.error||r.statusText); return data; }
 function experimentFor(file) { return experiments.find(experiment=>experiment.id===file.experiment_id); }
 function updateView() {
@@ -274,6 +304,7 @@ function clearTrace() {
   selected=null;$('metrics').replaceChildren();$('timeline').replaceChildren();
   $('coverage').textContent='';$('source-section').hidden=true;$('source').textContent='';
   $('trial-summary').hidden=true;
+  renderTrialStages(null);
   $('trace-context').replaceChildren();$('trace-context').hidden=true;
 }
 function showEmptyTrace(title, subtitle, message) {
@@ -316,7 +347,7 @@ async function load(id, {reveal=false}={}) {
   if(file)showFileInNavigation(file,reveal);
   selected=id;fileList();const request=++loadVersion;notice('正在读取…');
   try {const trace=await api('/api/trace?id='+encodeURIComponent(id)+'&'+rootsQuery(activeRoots));if(request!==loadVersion)return;render(trace);}
-  catch(e){if(request!==loadVersion)return;notice(e.message,true);$('title').textContent='无法读取此日志';$('subtitle').textContent=files.find(f=>f.id===id)?.name||'';$('metrics').replaceChildren();$('coverage').textContent='';$('timeline').replaceChildren();$('source-section').hidden=true;$('trial-summary').hidden=true;$('trace-context').replaceChildren();$('trace-context').hidden=true;}
+  catch(e){if(request!==loadVersion)return;notice(e.message,true);$('title').textContent='无法读取此日志';$('subtitle').textContent=files.find(f=>f.id===id)?.name||'';$('metrics').replaceChildren();$('coverage').textContent='';$('timeline').replaceChildren();$('source-section').hidden=true;$('trial-summary').hidden=true;renderTrialStages(null);$('trace-context').replaceChildren();$('trace-context').hidden=true;}
 }
 
 function updateExperiments() {
@@ -358,32 +389,53 @@ function average(rows, value) {
   const known=rows.map(value).filter(v=>typeof v==='number'&&Number.isFinite(v));
   return `${known.length?fmt(known.reduce((a,b)=>a+b,0)/known.length):'未知'} (${known.length}/${rows.length})`;
 }
+function renderStageComparison(trials, conditions) {
+  const body=comparisonTable($('stage-comparison'),['阶段',...conditions]);
+  for(const [key,label] of TRIAL_STAGES) {
+    const row=el('tr',''), heading=el('th','',label);heading.scope='row';row.append(heading);
+    for(const condition of conditions) {
+      const rows=trials.filter(trial=>trial.condition===condition);
+      const known=rows.map(trial=>trial.stage_durations_sec?.[key]).filter(value=>value!=null);
+      const total=known.length?known.reduce((sum,value)=>sum+value,0):null;
+      const cell=el('td','stage-stat');
+      cell.append(el('strong','',`平均 ${seconds(known.length?total/known.length:null)}`),
+        el('small','',`已记录 ${known.length}/${rows.length}`));
+      if(known.length)cell.append(el('small','',`合计 ${seconds(total)} · 最大 ${seconds(Math.max(...known))}`));
+      row.append(cell);
+    }
+    body.append(row);
+  }
+}
 function renderComparison() {
   const experiment=experiments.find(e=>e.id===$('compare-experiment').value);
   $('compare-experiment').disabled=!experiments.length;$('compare-task').disabled=!experiment;
   if(!experiment) {
-    for(const id of ['comparison-metrics','condition-summary','trial-comparison','experiment-warnings'])$(id).replaceChildren();
+    for(const id of ['comparison-metrics','condition-summary','stage-comparison','trial-comparison','experiment-warnings'])$(id).replaceChildren();
     $('experiment-status').textContent='';return;
   }
   const task=$('compare-task').value, trials=experiment.trials.filter(t=>!task||t.task_id===task);
+  const recorded=trials.filter(trial=>trial.result_recorded!==false);
+  const finalizedCount=experiment.trials.filter(trial=>trial.result_recorded!==false).length;
+  const snapshots=trials.length-recorded.length;
   const taskIds=new Set([...trials.map(trial=>trial.task_id),
     ...files.filter(file=>file.experiment_id===experiment.id&&(!task||file.task_id===task)).map(file=>file.task_id)].filter(Boolean));
   $('comparison-metrics').replaceChildren(
     metricCard('对比条件',experiment.conditions.length,'所选实验的运行条件','blue'),
     metricCard('可查看任务',taskIds.size,task?'已筛选到单个任务':'结果或 trace 中已识别的任务','cyan'),
-    metricCard('已记录 trial',trials.length,task?'当前任务的重复运行':'所选实验的全部运行','violet'),
-    metricCard('已有评分',trials.filter(trial=>trial.reward!=null).length,'缺失评分不计为零','amber'));
-  $('experiment-status').textContent=`${experiment.status} · 已记录 ${experiment.trials.length} / ${experiment.planned_trials??'未知'} 个 trial · ${experiment.directory}`;
+    metricCard('已记录 trial',recorded.length,task?'当前任务的最终结果':'所选实验的最终结果','violet'),
+    metricCard('已有评分',recorded.filter(trial=>trial.reward!=null).length,'缺失评分不计为零','amber'));
+  $('experiment-status').textContent=`${experiment.status} · 已记录 ${finalizedCount} / ${experiment.planned_trials??'未知'} 个 trial${snapshots?` · 当前范围另有 ${snapshots} 个阶段快照`:''} · ${experiment.directory}`;
   $('experiment-warnings').replaceChildren();
   if(experiment.warnings.length)$('experiment-warnings').append(el('div','notice error',experiment.warnings.join('\n')));
   const summary=comparisonTable($('condition-summary'),['Condition','已记录 / 有评分','平均 reward','平均输入 token','平均输出 token','平均费用 USD','平均工具调用','平均耗时 s']);
   for(const condition of experiment.conditions) {
-    const rows=trials.filter(t=>t.condition===condition), tr=el('tr','');
+    const rows=recorded.filter(t=>t.condition===condition), tr=el('tr','');
     const values=[condition,`${rows.length} / ${rows.filter(t=>t.reward!=null).length}`,average(rows,t=>t.reward),
       average(rows,t=>t.usage.input_tokens),average(rows,t=>t.usage.output_tokens),average(rows,t=>t.usage.cost_usd),
       average(rows,t=>t.tool_calls),average(rows,t=>t.duration_sec)];
     for(const value of values)tr.append(el('td','',value));summary.append(tr);
   }
+  renderStageComparison(trials,experiment.conditions);
   const matrix=comparisonTable($('trial-comparison'),['任务 / repeat',...experiment.conditions]);
   const pairs=new Map();
   for(const trial of trials) {
@@ -400,11 +452,13 @@ function renderComparison() {
         const file=files.find(f=>f.id===trial.trace_id);
         const cell=el('div','trial-cell');
         cell.append(badge(trial.status||'未知',trial.status==='completed'?'good':'bad'),el('strong','',`reward ${fmt(trial.reward)}`));
+        if(trial.result_recorded===false)cell.append(el('small','','阶段快照 · 评分和用量尚未计入最终汇总'));
         cell.append(el('small','',`Harness：${file?.harness||'未知'}`));
         cell.append(el('small','',`模型：${trial.model||'未知'}`));
         cell.append(el('small','',`输入 / 输出 token：${fmt(trial.usage.input_tokens)} / ${fmt(trial.usage.output_tokens)}`));
         cell.append(el('small','',`费用 USD：${fmt(trial.usage.cost_usd)} · 工具：${fmt(trial.tool_calls)}`));
         cell.append(el('small','',`耗时：${fmt(trial.duration_sec)} s · 结束：${trial.finish_reason||'未知'}`));
+        const stages=el('details','extra');stages.append(el('summary','','阶段耗时'),stageBreakdown(trial));cell.append(stages);
         if(file) {
           const open=el('button','open-trace','查看 trace');open.type='button';
           open.addEventListener('click',async()=>{
@@ -472,8 +526,9 @@ function render(trace) {
   }
   $('trial-summary').hidden=!trial;
   if(trial)$('trial-summary').textContent=trial.result_recorded===false
-    ? `Trial ${trial.trial_id}：尚无结果记录，当前仅展示已保存的 trace；评分和累计用量不参与实验汇总。`
+    ? `Trial ${trial.trial_id}：尚无最终结果记录，当前展示已保存的阶段快照和 trace；评分和累计用量不参与最终结果汇总。`
     : `Trial 汇总：${trial.status} · reward ${fmt(trial.reward)} · 输入 / 输出 token ${fmt(trial.usage.input_tokens)} / ${fmt(trial.usage.output_tokens)} · 费用 USD ${fmt(trial.usage.cost_usd)} · 工具 ${fmt(trial.tool_calls)} · 全流程耗时 ${fmt(trial.duration_sec)} s。此处来自实验结果，不分摊到模型尝试。`;
+  renderTrialStages(trial);
   const failures=trace.events.filter(e=>e.event==='run.failed').map(e=>`运行异常：${e.data?.error_type||''} ${e.data?.message||''}`);
   const captureWarnings=trace.events.filter(e=>e.event==='capture.warning').map(e=>e.data?.message).filter(Boolean);
   notice([...trace.warnings,...failures,...new Set(captureWarnings)].join('\n'),failures.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;

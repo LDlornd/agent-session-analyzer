@@ -54,6 +54,9 @@
     <div class="section-heading"><h2>条件汇总</h2><span class="section-label">评分与运行消耗</span></div>
     <div id="condition-summary" class="comparison-scroll" tabindex="0" role="region" aria-label="条件汇总表，可横向滚动"></div>
     <p class="comparison-note">同一实验按 task + repeat 配对；缺失值保留未知。耗时包含准备、执行、评分和清理。</p>
+    <div class="section-heading"><h2>阶段耗时</h2><span class="section-label">按条件汇总 · 单位 s</span></div>
+    <div id="stage-comparison" class="comparison-scroll" tabindex="0" role="region" aria-label="阶段耗时汇总表，可横向滚动"></div>
+    <p class="comparison-note">各阶段分别统计平均、合计、最大耗时及记录数；包含尚未写入最终结果的阶段快照，并随任务筛选更新。未执行或缺失的阶段显示“未记录”，不计为零。阶段合计与 trial 全流程耗时的统计范围不同。</p>
     <div class="section-heading"><h2>逐次运行对比</h2><span class="section-label">点击“查看 trace”进入实验查看</span></div>
     <div id="trial-comparison" class="comparison-scroll trial-matrix" tabindex="0" role="region" aria-label="逐次运行对比表，可横向滚动"></div>
     </div>
@@ -63,6 +66,7 @@
   <section id="metrics" class="metrics" aria-label="统计"></section>
   <p id="coverage" class="muted"></p>
   <p id="trial-summary" class="trial-summary" hidden></p>
+  <section id="trial-stages" class="trial-stages" aria-label="当前 trial 的阶段耗时" hidden></section>
   <div class="section-heading"><h2>执行轨迹</h2><span class="section-label">Session / Turn / Step / Attempt · Tool</span></div>
   <section id="timeline"><div class="empty">尚未选择文件</div></section>
   <details id="source-section" hidden><summary>全部事件 · 原始记录</summary><pre id="source"></pre></details>

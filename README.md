@@ -113,12 +113,21 @@ with DshRecorder("./logs/harness", metadata={
 可直接打开每个 trial 的 trace。各指标均显示已知样本数 / 已记录样本数，缺失不当作零；
 耗时是整个 trial 的准备、执行、评分及清理耗时。不同实验目录独立配对。
 
+结果中的 `stage_durations_sec` 会在 trace 详情和逐次运行对比中显示六个阶段：
+`prepare`（任务准备）、`environment`（环境初始化）、`setup`（环境设置）、
+`agent`（Agent 执行）、`evaluate`（结果评分）、`cleanup`（环境清理）。
+详情使用横向条形图标出最长的已记录阶段，同时显示数值与已记录阶段合计；
+对比页按条件展示每个阶段的平均、合计、最大耗时及已记录数 / 当前范围 trial 数，随任务筛选更新。
+零耗时保留为 `0 s`；缺失、未执行或无效值显示“未记录”，旧实验不从总耗时反推阶段数据。
+阶段合计只累加已记录阶段，不要求等于全流程 `duration_sec`。
+
 打开某个实验的 trace 时，上方对比区自动切换到对应实验。切换对比区的实验或任务时，
 下方保留符合选择的 trace，或打开该范围内最新的 trace；没有可读 trace 时清空旧详情并说明原因，
 避免把不同实验的数据混在一起。独立 trace 不会被补造实验结果。
 
 目前支持 `schema_version=1` 的 Evaluation 结果。每行包含 `trial_id`、`task_id`、
 `condition`、整数 `repeat`，可提供 `reward`、`status`、`duration_sec`、`model` 和 `agent`。
+阶段耗时使用可选的 `stage_durations_sec` 对象，其值为非负秒数或 `null`。
 `manifest.config.conditions` 提供条件列表。condition 名称没有固定限制。
 `trace_path` 相对 `trials/<trial_id>/`，也接受位于扫描目录内的绝对路径。
 识别实验后，只按 trial 约定读取 trace：保留 `agent/trace/*.jsonl` 和有效的显式引用；
@@ -128,7 +137,10 @@ with DshRecorder("./logs/harness", metadata={
 实验内不再把结果、工具调用或任务目录中的任意 JSONL 当作会话扫描。
 
 运行中或中断的实验可以没有 `results.jsonl`，已保存的 trace 仍按实验归类；
-没有结果记录的 trial 会明确标注，不补造 reward、状态或累计用量，也不计入已记录结果的汇总。
+尚未出现在 `results.jsonl` 的 trial 会读取扫描范围内的 `trials/<trial_id>/result.json` 阶段快照，
+即使没有 trace 也能在对比页查看其已记录阶段。快照明确标注，其评分和累计用量不计入最终结果汇总；
+已有最终结果时优先使用 `results.jsonl`，避免重复计数。刷新会重新读取快照。
+没有结果记录或快照的 trial 不补造 reward、状态或累计用量。
 
 汇总优先读取 `agent.usage` 中的 `input_tokens`、`output_tokens`、`total_tokens`、
 `cache_read_tokens`、`cache_write_tokens`、`reasoning_tokens`、`cost_usd`，

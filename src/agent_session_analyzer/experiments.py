@@ -38,9 +38,16 @@ def normalize_trial(row: dict) -> dict:
         if value is None:
             value = tokens.get(key, tokens.get(aliases.get(key)))
         metrics[key] = _number(value)
+    durations = {}
+    recorded_durations = row.get("stage_durations_sec")
+    if isinstance(recorded_durations, dict):
+        for stage, value in recorded_durations.items():
+            seconds = _number(value)
+            durations[stage] = seconds if seconds is not None and seconds >= 0 else None
     return {k: row.get(k) for k in ("trial_id", "task_id", "condition", "repeat", "model",
                                     "status", "passed", "agent_runner", "errors")} | {
         "reward": _number(row.get("reward")), "duration_sec": _number(row.get("duration_sec")),
+        "stage_durations_sec": durations,
         "finish_reason": agent.get("finish_reason"), "tool_calls": _number(agent.get("tool_calls")),
         "usage": metrics, "trace_id": None, "trace_error": None, "result_recorded": True,
     }
@@ -173,7 +180,7 @@ def load_experiments(
                 except (ValueError, OSError) as error:
                     experiment["warnings"].append(f"实验结果读取失败：{error}")
             else:
-                experiment["warnings"].append("扫描范围内尚无 results.jsonl；已有 trace 仍可查看，未记录的结果不参与汇总。")
+                experiment["warnings"].append("扫描范围内尚无 results.jsonl；已有阶段快照和 trace 仍可查看，快照的评分和用量不参与最终结果汇总。")
             trial_root = (directory / "trials").resolve()
             trials, recorded_ids = [], set()
             for row in rows:
@@ -194,8 +201,21 @@ def load_experiments(
                         or not any(trial_dir.is_relative_to(root) or root.is_relative_to(trial_dir) for root in roots)):
                     continue
                 trial = normalize_trial({"trial_id": trial_dir.name, "model": model_name})
+                reference = None
+                result_path = (trial_dir / "result.json").resolve()
+                if result_path.is_file() and _in_roots(result_path, roots):
+                    try:
+                        row = json.loads(_read(result_path))
+                        if not isinstance(row, dict) or _validate_trial(row, trial_root) != trial_dir.resolve():
+                            raise ValueError("result.json 的 trial_id 与所在目录不一致")
+                        trial = normalize_trial(row)
+                        reference = row.get("trace_path") or (row.get("agent") or {}).get("trace_path")
+                        experiment["trials"].append(trial)
+                    except (ValueError, OSError, TypeError, AttributeError) as error:
+                        experiment["warnings"].append(f"{trial_dir.name} 阶段快照读取失败：{error}")
+                # Only results.jsonl rows count towards finalized score/usage summaries.
                 trial["result_recorded"] = False
-                trials.append((trial_dir, trial, None))
+                trials.append((trial_dir, trial, reference))
             for trial_dir, trial, reference in trials:
                 trial.update(experiment_id=experiment["id"], experiment_name=experiment["name"])
                 if trial["condition"] and trial["condition"] not in experiment["conditions"]:
