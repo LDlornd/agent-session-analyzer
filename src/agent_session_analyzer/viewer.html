@@ -72,4 +72,21 @@
   <details id="source-section" hidden><summary>全部事件 · 原始记录</summary><pre id="source"></pre></details>
   </section>
 </main>
+<div class="copy-notification" role="status" aria-live="polite" aria-atomic="true">
+  <div id="copy-success-card" class="copy-success-card" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+    <span>已复制到剪贴板</span>
+  </div>
+</div>
+<dialog id="copy-error-dialog" class="copy-error-dialog" aria-labelledby="copy-error-title" aria-describedby="copy-error-message">
+  <div class="copy-error-header">
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/></svg>
+    <div><h2 id="copy-error-title">复制目录失败</h2><p id="copy-error-message"></p></div>
+  </div>
+  <div class="copy-error-body">
+    <div class="block-title">目标目录</div><div id="copy-error-directory" class="copy-error-directory"></div>
+    <div class="block-title">错误详情</div><pre id="copy-error-details"></pre>
+  </div>
+  <form method="dialog" class="copy-error-footer"><button class="copy-error-confirm" type="submit" autofocus>确认</button></form>
+</dialog>
 </body></html>

@@ -217,7 +217,8 @@ def load_experiments(
                 trial["result_recorded"] = False
                 trials.append((trial_dir, trial, reference))
             for trial_dir, trial, reference in trials:
-                trial.update(experiment_id=experiment["id"], experiment_name=experiment["name"])
+                trial.update(experiment_id=experiment["id"], experiment_name=experiment["name"],
+                             directory=str(trial_dir.resolve()))
                 if trial["condition"] and trial["condition"] not in experiment["conditions"]:
                     experiment["conditions"].append(trial["condition"])
                 paths, primary, error = _trial_traces(trial_dir, reference, roots)

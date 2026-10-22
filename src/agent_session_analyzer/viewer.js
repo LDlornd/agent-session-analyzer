@@ -6,6 +6,7 @@ let files = [], selected = null, loadVersion = 0, scanVersion = 0;
 let activeRoots = initialQuery.has('root') ? initialQuery.getAll('root') : null;
 let experiments = [];
 let navigationMode = null;
+let copySuccessTimer = null;
 const groupState = new Map();
 const fmt = n => n == null ? '未提供' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:6});
 const TRIAL_STAGES = [['prepare','任务准备'],['environment','环境初始化'],['setup','环境设置'],
@@ -51,6 +52,44 @@ function renderTrialStages(trial) {
 }
 async function api(url, options) { const r=await fetch(url, options); const data=await r.json(); if(!r.ok)throw new Error(data.error||r.statusText); return data; }
 function experimentFor(file) { return experiments.find(experiment=>experiment.id===file.experiment_id); }
+function showCopySuccess() {
+  clearTimeout(copySuccessTimer);
+  $('copy-success-card').hidden=false;
+  copySuccessTimer=setTimeout(()=>{
+    $('copy-success-card').hidden=true;copySuccessTimer=null;
+  },3000);
+}
+function showCopyError(error, directory, trigger) {
+  clearTimeout(copySuccessTimer);copySuccessTimer=null;$('copy-success-card').hidden=true;
+  $('copy-error-message').textContent=error.message||String(error);
+  $('copy-error-details').textContent=error.stack||`${error.name||'Error'}: ${error.message||String(error)}`;
+  $('copy-error-directory').textContent=directory||'未获取到';
+  const dialog=$('copy-error-dialog');
+  if(!dialog.open) {
+    dialog.addEventListener('close',()=>{
+      if(trigger.isConnected)trigger.focus({preventScroll:true});
+    },{once:true});
+    dialog.showModal();
+  }
+}
+function traceDirectoryCopy(file) {
+  const control=el('div','trace-directory-copy'), button=el('button','copy-directory','复制目录');
+  const directory=file.trace_root, label=`复制 ${file.title} 的 trace 根目录`;
+  button.type='button';button.title=`${label}\n${directory||'目录未提供，请重启查看器并刷新列表'}`;button.setAttribute('aria-label',label);
+  button.addEventListener('click',async event=>{
+    event.preventDefault();event.stopPropagation();
+    button.disabled=true;
+    try {
+      if(!directory)throw new Error('未获取到 trace 目录，请重启查看器并刷新列表。');
+      if(!navigator.clipboard?.writeText)throw new Error('当前浏览器无法使用剪贴板，请通过本机地址打开查看器。');
+      await navigator.clipboard.writeText(directory);
+      showCopySuccess();
+    } catch(error) {
+      showCopyError(error,directory,button);
+    } finally {button.disabled=false;}
+  });
+  control.append(button);return control;
+}
 function updateView() {
   const comparing=activeView==='compare';
   $('trace-page').hidden=comparing;$('experiment-section').hidden=!comparing;
@@ -117,7 +156,9 @@ function fileButton(f, {showRepeat=false}={}) {
   b.append(el('small','file-path',f.name));
   b.append(el('small','',new Date(f.modified_ms).toLocaleString('zh-CN')+' · '+(f.size/1024).toFixed(1)+' KB'));
   if(f.error)b.append(el('small','file-error',f.error));
-  b.addEventListener('click',()=>load(f.id,{reveal:true}));return b;
+  b.addEventListener('click',()=>load(f.id,{reveal:true}));
+  // Keep the copy control beside the trace button, not nested inside it.
+  const entry=el('div','trace-entry');entry.append(b,traceDirectoryCopy(f));return entry;
 }
 function matchingFiles() {
   const query=$('search').value.trim().toLowerCase(), harness=$('filter-harness').value;

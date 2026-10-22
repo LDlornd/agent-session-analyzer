@@ -52,10 +52,12 @@ class TraceServer(ThreadingHTTPServer):
             root = next(root for root in roots if path.is_relative_to(root))
             stat = path.stat()
             key = path_id(path)
+            trial = contexts.get(path)
             entries[key] = {"id": key, "name": str(path.relative_to(root)),
                             "root": str(root), "size": stat.st_size,
                             "modified_ms": int(stat.st_mtime * 1000), "path": path,
-                            "trial": contexts.get(path)}
+                            "trace_root": trial["directory"] if trial else str(path.parent),
+                            "trial": trial}
         return entries, experiments
 
 
