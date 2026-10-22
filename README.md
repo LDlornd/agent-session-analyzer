@@ -86,6 +86,8 @@ agent-session-analyzer --root ./logs/harness --root ./config/dsh/sessions --port
 
 列表和详情标题显示任务名称，文件名与会话 ID 仍作为辅助信息保留。详情顶部集中显示当前实验及 Harness、模型、条件，与左侧选择联动。从对比表“查看 trace”时，会展开对应实验和任务，并清除阻挡该 trace 的筛选。展开 trace 后仍可查看 turn/step、思考文本、工具参数、工具结果和原始事件。
 
+执行轨迹中每个 step 下的 Model attempt 和工具调用详情默认折叠，点击各自标题可展开或收起。
+
 实验查看页左侧每条 trace 右上角都有“复制目录”按钮。实验内的 trace 复制该次运行的 `trials/<trial_id>/` 绝对路径，例如 `trials/threejs-to-obj__with-skill__001`；独立运行的 trace 复制文件所在目录。按钮文字始终保留“复制目录”；成功时在左下角显示绿色“已复制到剪贴板”消息卡片，3 秒后自动消失。失败时在页面中间显示消息卡片，包含异常信息、堆栈、目标目录和“确认”按钮，点击确认或按 Esc 关闭并返回复制按钮。复制不会切换实验、trace 或折叠状态。
 
 分类信息从日志读取，不需要重录旧 trace：

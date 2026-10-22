@@ -523,7 +523,7 @@ function renderComparison() {
   if(!pairs.size)$('trial-comparison').append(el('p','muted','尚无已记录的 trial。刷新可读取后续结果。'));
 }
 function attemptCard(e) {
-  const d=e.data||{}, card=el('details','attempt');card.open=true;
+  const d=e.data||{}, card=el('details','attempt');
   const summary=el('summary','',`Model attempt ${d.attempt_index} · ${e.model?.model||'模型未提供'} `);
   const labels={committed:'已提交',completed:'已返回',failed:'请求失败',event_only:'由事件推导 / completion 未记录',uncommitted:'未提交 / 失败尝试',interrupted:'已中断'};
   summary.append(badge(labels[d.status]||d.status||'未知',['committed','completed'].includes(d.status)?'good':'bad'));
