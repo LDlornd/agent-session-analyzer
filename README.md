@@ -79,8 +79,12 @@ agent-session-analyzer --root ./logs/harness --root ./config/dsh/sessions --port
 
 实验和任务默认全部折叠，实验查看列表按最近 trace 的修改时间排序。展开实验后，同一 `task_id` 的重复运行放在同一任务组中；点击任务标题展开或折叠该任务的全部 trace。组内按 repeat 编号排序，同一 repeat 的不同条件相邻展示。任务名称只在组标题显示，每条运行标明 repeat、条件、Harness 和全部模型，点击即可查看 trace。刷新列表或筛选时，保留同一页面内已设置的折叠状态。缺少 `task_id` 的 trace 单独展示，避免误合并同名任务；同一 trace 只列一次。可组合使用 Harness、模型、条件、执行状态筛选和搜索。没有 trace 的实验仍可在实验对比页查看实验状态与已记录结果。
 
-“执行状态”可筛选全部、执行成功、执行失败、运行中或状态未知，同时支持实验内和独立运行的 trace。
-实验 trace 优先使用 trial 的 `status`：`completed` 表示执行成功，`error`、`cancelled`、`interrupted` 等终止失败状态表示执行失败，`running` 单独显示。
+“运行状态”可筛选全部、执行成功、全部执行失败、环境构建/准备失败、Agent 运行失败、Agent 运行超时、评分阶段失败、清理失败、运行中或状态未知，同时支持实验内和独立运行。
+无 trace 的 trial 也会在实验任务列表显示，可打开查看结果、错误和阶段耗时；它们不伪造 agent 会话事件。
+失败类型由 `agent_session_analyzer.outcomes` 根据 `errors[].stage` 和 agent 结束原因集中判断，旧日志无需迁移；
+`prepare`、`environment`、`setup` 归入环境构建/准备失败，普通工具/API 超时不等同于 agent 总预算耗尽。
+详情同时显示 agent 结束原因，例如“评分阶段失败 · Agent：已完成”，任务是否通过仍以评分为准。
+实验运行优先根据失败阶段和 agent 结束原因分类，再使用 trial 的 `status` 判断流程状态；`running` 单独显示。
 独立 trace 从最近一次 `run.finished` / `run.failed` 或原生 `turn/end` 判断；缺少结束事件时保留未知，不把可能还在执行的日志当作失败。
 执行成功不代表 `reward` 评分通过，日志读取失败也不当作执行失败。绿色底色、边条和实心标签表示成功，红色表示失败，运行中使用琥珀色；选中状态保留蓝色边框。详情和逐次运行对比使用相同的状态标签。
 

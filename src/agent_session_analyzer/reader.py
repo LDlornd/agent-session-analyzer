@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .schema import SCHEMA
+from .outcomes import trial_failure_type
 from .adapters.dsh import TOKEN_FIELDS, DshAdapter
 from .adapters.openhands import OpenHandsAdapter, text_content
 
@@ -152,6 +153,8 @@ def _input_text(value) -> str:
 
 def execution_status(trace: dict, *, trial: dict | None = None) -> str:
     """Prefer trial execution status; never infer it from reward or a tool error."""
+    if trial_failure_type(trial):
+        return "failure"
     status = (trial or {}).get("status")
     if isinstance(status, str) and status in EXECUTION_STATUSES:
         return EXECUTION_STATUSES[status]
@@ -176,6 +179,29 @@ def execution_status(trace: dict, *, trial: dict | None = None) -> str:
         if event.get("event") == "turn/start":
             return "unknown"
     return "unknown"
+
+
+def failure_type(trace: dict, *, trial: dict | None = None) -> str | None:
+    """Trial stages own the classification; standalone traces describe the agent."""
+    if trial is not None:
+        return trial_failure_type(trial)
+    for event in reversed(trace.get("events", [])):
+        data = event.get("data") or {}
+        if event.get("event") == "run.failed":
+            return trial_failure_type({"errors": [{
+                "stage": "agent", "type": data.get("error_type"),
+                "message": data.get("message"),
+            }]})
+        if event.get("event") == "run.finished":
+            return trial_failure_type({"finish_reason": data.get("finish_reason")})
+        if event.get("event") == "turn/end":
+            reason = data.get("reason")
+            if isinstance(reason, dict):
+                reason = reason.get("kind")
+            return trial_failure_type({"finish_reason": reason})
+        if event.get("event") in {"run.started", "turn/start"}:
+            return None
+    return None
 
 
 def trace_metadata(trace: dict, *, trial: dict | None = None) -> dict:
@@ -225,6 +251,10 @@ def trace_metadata(trace: dict, *, trial: dict | None = None) -> dict:
             title = title[:120] + "…"
     if not harnesses and trace.get("format") == "dsh/session-v3":
         harnesses.add("dsh")
+    if not harnesses and trial:
+        runner = trial.get("agent_runner") or ""
+        if runner.startswith("harness."):
+            harnesses.add(runner.split(".")[1])
     if not (models or configured_models) and trial and trial.get("model"):
         configured_models.add(trial["model"])
     # Providers may return a bare name while the configured name is qualified,
@@ -240,6 +270,8 @@ def trace_metadata(trace: dict, *, trial: dict | None = None) -> dict:
             "models": sorted(labels) or ["未知模型"],
             "experiment": experiment or "独立运行",
             "execution_status": execution_status(trace, trial=trial),
+            "failure_type": failure_type(trace, trial=trial),
+            "agent_finish_reason": (trial or {}).get("finish_reason"),
             "experiment_id": _label(metadata.get("experiment_id")),
             "trial_id": _label(metadata.get("trial_id")),
             "condition": _label(metadata.get("condition")), "repeat": metadata.get("repeat")}

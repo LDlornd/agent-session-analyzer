@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from .reader import MAX_FILE_BYTES, execution_status, parse_jsonl
+from .outcomes import trial_failure_type
 
 
 def path_id(path: Path) -> str:
@@ -49,6 +50,7 @@ def normalize_trial(row: dict) -> dict:
         "reward": _number(row.get("reward")), "duration_sec": _number(row.get("duration_sec")),
         "stage_durations_sec": durations,
         "execution_status": execution_status({}, trial=row),
+        "failure_type": trial_failure_type(row),
         "finish_reason": agent.get("finish_reason"), "tool_calls": _number(agent.get("tool_calls")),
         "usage": metrics, "trace_id": None, "trace_error": None, "result_recorded": True,
     }
@@ -218,8 +220,14 @@ def load_experiments(
                 trial["result_recorded"] = False
                 trials.append((trial_dir, trial, reference))
             for trial_dir, trial, reference in trials:
+                result_path = (trial_dir / "result.json").resolve()
+                if result_path.is_file() and _in_roots(result_path, roots):
+                    timestamp_path = result_path
+                else:
+                    timestamp_path = trial_dir if trial_dir.is_dir() else directory
                 trial.update(experiment_id=experiment["id"], experiment_name=experiment["name"],
-                             directory=str(trial_dir.resolve()))
+                             directory=str(trial_dir.resolve()),
+                             modified_ms=int(timestamp_path.stat().st_mtime * 1000))
                 if trial["condition"] and trial["condition"] not in experiment["conditions"]:
                     experiment["conditions"].append(trial["condition"])
                 paths, primary, error = _trial_traces(trial_dir, reference, roots)

@@ -57,7 +57,26 @@ class TraceServer(ThreadingHTTPServer):
                             "root": str(root), "size": stat.st_size,
                             "modified_ms": int(stat.st_mtime * 1000), "path": path,
                             "trace_root": trial["directory"] if trial else str(path.parent),
-                            "trial": trial}
+                            "trial": trial, "has_trace": True}
+        represented = {(trial["experiment_id"], trial["trial_id"])
+                       for trial in contexts.values()}
+        for experiment in experiments:
+            for trial in experiment["trials"]:
+                if ((experiment["id"], trial["trial_id"]) in represented
+                        or not trial.get("directory")):
+                    continue
+                directory = Path(trial["directory"])
+                root = next((root for root in roots if directory.is_relative_to(root)
+                             or root.is_relative_to(directory)), None)
+                if root is None:
+                    continue
+                key = "trial:" + path_id(directory)
+                entries[key] = {
+                    "id": key, "name": trial["trial_id"], "root": str(root),
+                    "size": 0, "modified_ms": trial["modified_ms"],
+                    "path": None, "trace_root": str(directory), "trial": trial,
+                    "has_trace": False,
+                }
         return entries, experiments
 
 
@@ -128,7 +147,7 @@ class TraceHandler(BaseHTTPRequestHandler):
                 for item in entries.values():
                     entry = {k: v for k, v in item.items() if k != "path"}
                     try:
-                        trace = read_trace(item["path"], trial=item["trial"])
+                        trace = read_trace(item["path"], trial=item["trial"]) if item["has_trace"] else {}
                         entry.update(trace_metadata(trace, trial=item["trial"]))
                     except UnsupportedTraceFormat:
                         continue  # results/tool-call logs are not session traces.
@@ -144,7 +163,13 @@ class TraceHandler(BaseHTTPRequestHandler):
                 if entry is None:
                     self.send(404, {"error": "文件不存在，或不在配置的目录中"})
                     return
-                trace = read_trace(entry["path"], trial=entry["trial"])
+                if entry["has_trace"]:
+                    trace = read_trace(entry["path"], trial=entry["trial"])
+                else:
+                    trace = {"session_id": None, "events": [], "format": "trial/result",
+                             "file": "result.json", "warnings": [
+                                 entry["trial"].get("trace_error") or "此 trial 尚无可读取的 trace",
+                             ]}
                 trace["summary"] = summarize(trace)
                 trace["metadata"] = trace_metadata(trace, trial=entry["trial"])
                 trace["trial"] = entry["trial"]

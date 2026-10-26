@@ -52,10 +52,12 @@ function renderTrialStages(trial) {
 }
 async function api(url, options) { const r=await fetch(url, options); const data=await r.json(); if(!r.ok)throw new Error(data.error||r.statusText); return data; }
 function experimentFor(file) { return experiments.find(experiment=>experiment.id===file.experiment_id); }
-function executionBadge(status, originalStatus) {
+function executionBadge(status, originalStatus, failureType) {
   const labels={success:'执行成功',failure:'执行失败',running:'运行中',unknown:'状态未知'};
-  const node=el('span','execution-status '+(status||'unknown'),labels[status]||labels.unknown);
-  node.title=(originalStatus?`原始状态：${originalStatus}。`:'')+'执行状态不代表 reward 评分是否通过。';return node;
+  const failures={environment_failure:'环境构建/准备失败',agent_failure:'Agent 运行失败',
+    agent_timeout:'Agent 运行超时',evaluation_failure:'评分阶段失败',cleanup_failure:'清理失败'};
+  const node=el('span','execution-status '+(status||'unknown')+' '+(failureType||''),failures[failureType]||labels[status]||labels.unknown);
+  node.title=(originalStatus?`原始状态：${originalStatus}。`:'')+'显示流程失败阶段；评分是否通过请查看 reward。';return node;
 }
 function showCopySuccess() {
   clearTimeout(copySuccessTimer);
@@ -146,7 +148,7 @@ function fileButton(f, {showRepeat=false}={}) {
   b.title=`${f.title}\n${f.root} / ${f.name}`;
   const title=showRepeat?`Repeat ${f.repeat??'未知'}${f.condition?' · '+f.condition:''}`:f.title;
   const heading=el('span','file-heading');heading.append(el('span','file-title',title));
-  heading.append(executionBadge(state,f.trial?.status));
+  heading.append(executionBadge(state,f.trial?.status,f.failure_type));
   b.append(heading);
   if(!showRepeat&&f.task_id&&f.task_id!==f.title)b.append(el('small','file-task-id',f.task_id));
   const owners=el('span','file-owners');
@@ -156,7 +158,7 @@ function fileButton(f, {showRepeat=false}={}) {
   if(!showRepeat&&f.condition)b.append(el('small','file-condition',`${f.condition} · repeat ${f.repeat??'未知'}`));
   if(!experimentFor(f)&&f.experiment!=='独立运行')b.append(el('small','file-recording-label',`标签：${f.experiment}`));
   b.append(el('small','file-path',f.name));
-  b.append(el('small','',new Date(f.modified_ms).toLocaleString('zh-CN')+' · '+(f.size/1024).toFixed(1)+' KB'));
+  b.append(el('small','',new Date(f.modified_ms).toLocaleString('zh-CN')+' · '+(f.has_trace===false?'无 trace · 查看运行结果':(f.size/1024).toFixed(1)+' KB')));
   if(f.error)b.append(el('small','file-error',`读取失败：${f.error}`));
   b.addEventListener('click',()=>load(f.id,{reveal:true}));
   // Keep the copy control beside the trace button, not nested inside it.
@@ -167,7 +169,7 @@ function matchingFiles() {
   const model=$('filter-model').value, condition=$('filter-condition').value, status=$('filter-status').value;
   return navigationFiles().filter(f=>(!harness||f.harness===harness)&&(!model||f.models.includes(model))&&
     (!condition||f.condition===condition)&&
-    (!status||(f.execution_status||'unknown')===status)&&
+    (!status||(f.execution_status||'unknown')===status||f.failure_type===status)&&
     [f.title,f.task_id,f.name,f.root,f.harness,...f.models,f.experiment,f.condition].join(' ').toLowerCase().includes(query));
 }
 function matchesEmptyExperiment(experiment) {
@@ -197,7 +199,7 @@ function taskGroups(parent, items) {
     group.open=groupState.get(key)??false;
     group.setAttribute('aria-label',task.title+'的重复运行');
     const heading=el('summary','task-heading');
-    heading.append(el('span','task-name',task.title),el('span','task-count',`${rows.length} 条 trace`));
+    heading.append(el('span','task-name',task.title),el('span','task-count',`${rows.length} 条运行`));
     group.append(heading);
     if(task.task_id&&task.task_id!==task.title)group.append(el('small','task-id',task.task_id));
     const repeats=el('div','repeat-files');
@@ -223,7 +225,7 @@ function experimentGroups(parent, items) {
     const group=el('details','experiment-group'+(active===experiment.id?' selected-experiment':''));
     group.open=groupState.get(experiment.id)??false;
     const head=el('summary','experiment-heading'), title=el('span','experiment-title');
-    title.append(el('span','experiment-name',experiment.name),el('span','experiment-count',all.length?`${rows.length}/${all.length} 条`:'暂无 trace'));
+    title.append(el('span','experiment-name',experiment.name),el('span','experiment-count',all.length?`${rows.length}/${all.length} 条运行`:'暂无运行'));
     const metadata=el('span','experiment-owners'), harnesses=[...new Set(all.map(file=>file.harness))];
     const models=[...new Set(all.length?all.flatMap(file=>file.models):experiment.trials.map(trial=>trial.model).filter(Boolean))];
     metadata.append(el('span','harness-label',harnesses.join(' / ')||'尚无执行轨迹'));
@@ -275,7 +277,7 @@ function fileList() {
   const visible=matchingFiles(), total=navigationFiles().length;
   if(navigationMode==='experiments') {
     const count=experimentGroups($('files'),visible);
-    $('file-count').textContent=`${count} 个实验 · ${visible.length}/${total} 条 trace · 最近运行优先`;
+    $('file-count').textContent=`${count} 个实验 · ${visible.length}/${total} 条运行 · 最近运行优先`;
   } else {
     for(const file of visible)$('files').append(fileButton(file));
     $('file-count').textContent=`${visible.length}/${total} 条独立 trace`;
@@ -313,7 +315,11 @@ function renderTraceContext(metadata) {
   container.append(el('span','context-experiment',label),
     el('span','context-owner',`Harness · ${metadata.harness}`),el('span','context-owner',`模型 · ${metadata.models.join(' / ')}`));
   if(metadata.condition)container.append(el('span','context-condition',`${metadata.condition} · repeat ${metadata.repeat??'未知'}`));
-  container.append(executionBadge(metadata.execution_status));
+  container.append(executionBadge(metadata.execution_status,null,metadata.failure_type));
+  if(metadata.agent_finish_reason) {
+    const reasons={finished:'已完成',completed:'已完成',timeout:'已超时',error:'运行失败'};
+    container.append(el('span','context-owner',`Agent：${reasons[metadata.agent_finish_reason]||metadata.agent_finish_reason}`));
+  }
 }
 function showRoots() {
   $('selected-roots').replaceChildren();
@@ -494,9 +500,10 @@ function renderComparison() {
       const td=el('td',''), matching=rows.filter(t=>t.condition===condition);
       if(!matching.length)td.append(el('span','muted','尚无结果'));
       for(const trial of matching) {
-        const file=files.find(f=>f.id===trial.trace_id);
+        const file=files.find(f=>f.id===trial.trace_id||(f.has_trace===false&&
+          f.experiment_id===experiment.id&&f.trial?.trial_id===trial.trial_id));
         const cell=el('div','trial-cell outcome-'+(trial.execution_status||'unknown'));
-        cell.append(executionBadge(trial.execution_status,trial.status),el('strong','',`reward ${fmt(trial.reward)}`));
+        cell.append(executionBadge(trial.execution_status,trial.status,trial.failure_type),el('strong','',`reward ${fmt(trial.reward)}`));
         if(trial.result_recorded===false)cell.append(el('small','','阶段快照 · 评分和用量尚未计入最终汇总'));
         cell.append(el('small','',`Harness：${file?.harness||'未知'}`));
         cell.append(el('small','',`模型：${trial.model||'未知'}`));
@@ -505,12 +512,13 @@ function renderComparison() {
         cell.append(el('small','',`耗时：${fmt(trial.duration_sec)} s · 结束：${trial.finish_reason||'未知'}`));
         const stages=el('details','extra');stages.append(el('summary','','阶段耗时'),stageBreakdown(trial));cell.append(stages);
         if(file) {
-          const open=el('button','open-trace','查看 trace');open.type='button';
+          const open=el('button','open-trace',file.has_trace===false?'查看运行结果':'查看 trace');open.type='button';
           open.addEventListener('click',async()=>{
             switchView('explorer');await load(file.id,{reveal:true});
             if(selected===file.id&&activeView==='explorer'){$('title').focus({preventScroll:true});$('title').scrollIntoView({block:'start'});}
           });cell.append(open);
           if(file.error)cell.append(el('small','comparison-error',file.error));
+          if(file.has_trace===false)cell.append(el('small','comparison-error',trial.trace_error));
         } else cell.append(el('small','comparison-error',trial.trace_error||'扫描范围内没有可读取的 trace'));
         if(trial.errors?.length)cell.append(extra('trial 错误',trial.errors));
         if(matching.length>1)cell.append(el('small','comparison-error',`重复配对：${trial.trial_id}`));
@@ -575,8 +583,9 @@ function render(trace) {
     : `Trial 汇总：${trial.status} · reward ${fmt(trial.reward)} · 输入 / 输出 token ${fmt(trial.usage.input_tokens)} / ${fmt(trial.usage.output_tokens)} · 费用 USD ${fmt(trial.usage.cost_usd)} · 工具 ${fmt(trial.tool_calls)} · 全流程耗时 ${fmt(trial.duration_sec)} s。此处来自实验结果，不分摊到模型尝试。`;
   renderTrialStages(trial);
   const failures=trace.events.filter(e=>e.event==='run.failed').map(e=>`运行异常：${e.data?.error_type||''} ${e.data?.message||''}`);
+  const trialErrors=(trial?.errors||[]).map(error=>`${error.stage} 阶段：${error.type} ${error.message||''}`);
   const captureWarnings=trace.events.filter(e=>e.event==='capture.warning').map(e=>e.data?.message).filter(Boolean);
-  notice([...trace.warnings,...failures,...new Set(captureWarnings)].join('\n'),failures.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;
+  notice([...trace.warnings,...failures,...trialErrors,...new Set(captureWarnings)].join('\n'),failures.length>0||trialErrors.length>0);const s=trace.summary,t=s.tokens;const partial=s.usage_coverage.total_tokens<s.attempts;
   $('metrics').replaceChildren();
   for(const [label,value,detail,tone] of [['总 token'+(partial?'（已知部分）':''),fmt(t.total_tokens),'只累计每次 attempt 的汇总 usage','blue'],['模型尝试',s.attempts,'包括已观测到的失败 / 重试','violet'],['工具调用',s.tools,'模型请求的工具调用数','cyan'],['轮次 / 步骤',`${s.turns} / ${s.steps}`,'Turn / Step','amber']])$('metrics').append(metricCard(label,value,detail,tone));
   $('coverage').textContent=`总 token 覆盖 ${s.usage_coverage.total_tokens}/${s.attempts} 个尝试 · 输入/缓存/思考保留来源口径，不重复相加。工具耗时是日志事件间隔；OpenHands step 为派生分组，耗时未知。`;
@@ -600,9 +609,11 @@ function render(trace) {
     if(!steps.size)stepsNode.append(el('p','muted','本轮未进入 step，或未采集到 step 事件。'));
     turn.append(stepsNode);$('timeline').append(turn);
   }
-  if(!turns.size)$('timeline').append(el('div','empty','文件中尚无 turn 事件；下方可查看采集状态。'));
+  if(!turns.size)$('timeline').append(el('div','empty',trace.format==='trial/result'
+    ?'此 trial 没有可读取的 agent trace；上方显示运行结果、错误及阶段耗时。'
+    :'文件中尚无 turn 事件；下方可查看采集状态。'));
   if(outside.length)$('timeline').append(extra('会话信息 / 运行状态 / 轮次外事件',outside));
-  $('source-section').hidden=false;$('source').textContent=trace.events.map(e=>JSON.stringify(e)).join('\n');
+  $('source-section').hidden=trace.format==='trial/result';$('source').textContent=trace.events.map(e=>JSON.stringify(e)).join('\n');
 }
 $('refresh').addEventListener('click',()=>refresh());
 $('choose-root').addEventListener('click',chooseRoot);
